@@ -1,244 +1,203 @@
-import { useCallback, useEffect, useRef, useState } from "react";
-import { toast } from "react-toastify";
-import { fetchStockChart, StockWebSocket } from "../services/stockApi";
-
-const STORAGE_KEY = "stock-tracker-watchlist";
-const ALERTS_KEY = "stock-tracker-alerts";
-
-function loadFromStorage(key, fallback) {
-  try {
-    const stored = localStorage.getItem(key);
-    return stored ? JSON.parse(stored) : fallback;
-  } catch {
-    return fallback;
-  }
-}
-
-function saveToStorage(key, data) {
-  localStorage.setItem(key, JSON.stringify(data));
-}
+import { useCallback, useEffect, useRef, useState } from 'react';
+import { toast } from 'react-toastify';
+import { useSpacetimeDB, useTable, useReducer } from 'spacetimedb/react';
+import { tables, reducers } from '../module_bindings/index.ts';
 
 export function useStockTracker() {
-  const [watchlist, setWatchlist] = useState(() =>
-    loadFromStorage(STORAGE_KEY, []),
+  const { identity, isActive, getConnection } = useSpacetimeDB();
+
+  // ─── Server-synced state via SpacetimeDB subscriptions ───────────────────────
+
+  const [watchlistItems, watchlistReady] = useTable(
+    identity ? tables.watchlistItem.where(r => r.owner.eq(identity)) : tables.watchlistItem,
+    {
+      onInsert: item => {
+        // When a new watchlist item appears, fetch its chart data
+        if (identity && item.owner.toHexString() === identity.toHexString()) {
+          fetchChartForSymbol(item.symbol);
+        }
+      },
+    }
   );
-  const [alerts, setAlerts] = useState(() => loadFromStorage(ALERTS_KEY, []));
-  const [stockData, setStockData] = useState({});
+
+  const [stockPrices, pricesReady] = useTable(tables.stockPrice);
+
+  const triggeredAlertsRef = useRef(new Set());
+
+  const [alerts, alertsReady] = useTable(
+    identity ? tables.alert.where(r => r.owner.eq(identity)) : tables.alert,
+    {
+      onUpdate: (_oldAlert, newAlert) => {
+        // Server triggered the alert (active flipped to false)
+        if (!newAlert.active && newAlert.triggeredAt && !triggeredAlertsRef.current.has(String(newAlert.id))) {
+          triggeredAlertsRef.current.add(String(newAlert.id));
+
+          const price = stockPricesRef.current[newAlert.symbol]?.price;
+          const priceStr = price != null
+            ? `₹${price.toLocaleString('en-IN')}`
+            : `target ₹${newAlert.targetPrice.toLocaleString('en-IN')}`;
+
+          const direction = newAlert.alertType === 'above' ? '↑' : '↓';
+          const message = `${newAlert.symbol} alert triggered at ${priceStr} ${direction}`;
+
+          toast.success(message, { position: 'top-right', autoClose: 10000 });
+
+          if ('Notification' in window && Notification.permission === 'granted') {
+            new Notification('Stock Alert!', { body: message, icon: '/favicon.ico' });
+          }
+        }
+      },
+    }
+  );
+
+  // ─── Local client-side state (chart data + loading) ──────────────────────────
+
   const [chartData, setChartData] = useState({});
   const [loading, setLoading] = useState({});
   const [errors, setErrors] = useState({});
-  const [wsStatus, setWsStatus] = useState("disconnected");
 
-  const wsRef = useRef(null);
-  const triggeredAlertsRef = useRef(new Set());
-  const alertsRef = useRef(alerts);
+  // Keep a ref to stockPrices so the alert onUpdate callback can read current prices
+  const stockPricesRef = useRef({});
+  useEffect(() => {
+    const map = {};
+    for (const sp of stockPrices) {
+      map[sp.symbol] = sp;
+    }
+    stockPricesRef.current = map;
+  }, [stockPrices]);
+
+  // ─── Reducers (server mutations) ─────────────────────────────────────────────
+
+  const addToWatchlistReducer = useReducer(reducers.addToWatchlist);
+  const removeFromWatchlistReducer = useReducer(reducers.removeFromWatchlist);
+  const addAlertReducer = useReducer(reducers.addAlert);
+  const removeAlertReducer = useReducer(reducers.removeAlert);
+  const toggleAlertReducer = useReducer(reducers.toggleAlert);
+
+  // ─── Notification permission ──────────────────────────────────────────────────
 
   useEffect(() => {
-    alertsRef.current = alerts;
-  }, [alerts]);
-
-  useEffect(() => {
-    saveToStorage(STORAGE_KEY, watchlist);
-  }, [watchlist]);
-
-  useEffect(() => {
-    saveToStorage(ALERTS_KEY, alerts);
-  }, [alerts]);
-
-  // Request notification permission
-  useEffect(() => {
-    if ("Notification" in window && Notification.permission === "default") {
+    if ('Notification' in window && Notification.permission === 'default') {
       Notification.requestPermission();
     }
   }, []);
 
-  // ─── Alert checker ───
-  const checkAlerts = useCallback((symbol, price) => {
-    alertsRef.current.forEach((alert) => {
-      if (!alert.active || alert.symbol !== symbol) return;
-      if (triggeredAlertsRef.current.has(alert.id)) return;
+  // ─── Chart data fetching (via SpacetimeDB procedure) ─────────────────────────
 
-      let triggered = false;
-      let message = "";
-
-      if (alert.type === "above" && price >= alert.targetPrice) {
-        triggered = true;
-        message = `${symbol} reached ₹${price.toLocaleString("en-IN")} (target: ₹${alert.targetPrice.toLocaleString("en-IN")} ↑)`;
-      } else if (alert.type === "below" && price <= alert.targetPrice) {
-        triggered = true;
-        message = `${symbol} dropped to ₹${price.toLocaleString("en-IN")} (target: ₹${alert.targetPrice.toLocaleString("en-IN")} ↓)`;
-      }
-
-      if (triggered) {
-        triggeredAlertsRef.current.add(alert.id);
-
-        toast.success(message, { position: "top-right", autoClose: 10000 });
-
-        if ("Notification" in window && Notification.permission === "granted") {
-          new Notification("Stock Alert!", {
-            body: message,
-            icon: "/favicon.ico",
-          });
-        }
-
-        setAlerts((prev) =>
-          prev.map((a) =>
-            a.id === alert.id
-              ? { ...a, active: false, triggeredAt: new Date().toISOString() }
-              : a,
-          ),
-        );
-      }
-    });
-  }, []);
-
-  // ─── WebSocket for live price updates ───
-  useEffect(() => {
-    const ws = new StockWebSocket(
-      (update) => {
-        setStockData((prev) => {
-          const existing = prev[update.symbol];
-          if (!existing) return prev;
-
-          return {
-            ...prev,
-            [update.symbol]: {
-              ...existing,
-              currentPrice: update.price,
-              change: parseFloat(update.change?.toFixed(2)) ?? existing.change,
-              changePercent:
-                parseFloat(update.changePercent?.toFixed(2)) ??
-                existing.changePercent,
-              dayHigh: update.dayHigh || existing.dayHigh,
-              dayLow: update.dayLow || existing.dayLow,
-              volume: update.volume || existing.volume,
-              lastUpdated: new Date().toLocaleTimeString("en-IN"),
-            },
-          };
-        });
-
-        checkAlerts(update.symbol, update.price);
-      },
-      (status) => setWsStatus(status),
-    );
-
-    wsRef.current = ws;
-    return () => ws.close();
-  }, [checkAlerts]);
-
-  // Subscribe when watchlist changes
-  useEffect(() => {
-    if (!wsRef.current) return;
-    if (watchlist.length > 0) {
-      wsRef.current.subscribe(watchlist);
-    }
-  }, [watchlist]);
-
-  // ─── Fetch initial chart + quote data ───
-  const fetchStock = useCallback(async (symbol) => {
-    setLoading((prev) => ({ ...prev, [symbol]: true }));
-    setErrors((prev) => ({ ...prev, [symbol]: null }));
+  const fetchChartForSymbol = useCallback(async (symbol) => {
+    setLoading(prev => ({ ...prev, [symbol]: true }));
+    setErrors(prev => ({ ...prev, [symbol]: null }));
 
     try {
-      const { quote, priceHistory } = await fetchStockChart(symbol);
-      setStockData((prev) => ({ ...prev, [symbol]: quote }));
-      setChartData((prev) => ({ ...prev, [symbol]: priceHistory }));
-      return quote;
-    } catch (err) {
-      setErrors((prev) => ({
-        ...prev,
-        [symbol]: err.message || "Failed to fetch data",
-      }));
-      return null;
-    } finally {
-      setLoading((prev) => ({ ...prev, [symbol]: false }));
-    }
-  }, []);
+      const conn = getConnection();
+      if (!conn) throw new Error('Not connected');
 
-  // Fetch all on mount
-  useEffect(() => {
-    watchlist.forEach((symbol) => fetchStock(symbol));
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
-
-  const addToWatchlist = useCallback(
-    (symbol) => {
-      setWatchlist((prev) => {
-        if (prev.includes(symbol)) return prev;
-        return [...prev, symbol];
+      const raw = await conn.procedures.fetchChart({
+        symbol,
+        interval: '1m',
+        range: '1d',
       });
-      fetchStock(symbol);
-      if (wsRef.current) wsRef.current.subscribe(symbol);
-    },
-    [fetchStock],
-  );
+
+      const parsed = JSON.parse(raw);
+      setChartData(prev => ({ ...prev, [symbol]: parsed.priceHistory }));
+    } catch (err) {
+      setErrors(prev => ({ ...prev, [symbol]: err.message || 'Failed to fetch chart data' }));
+    } finally {
+      setLoading(prev => ({ ...prev, [symbol]: false }));
+    }
+  }, [getConnection]);
+
+  // Fetch chart data for all watchlist items on initial connection
+  const hasFetchedInitial = useRef(false);
+  useEffect(() => {
+    if (!isActive || !watchlistReady || hasFetchedInitial.current) return;
+    hasFetchedInitial.current = true;
+    for (const item of watchlistItems) {
+      fetchChartForSymbol(item.symbol);
+    }
+  }, [isActive, watchlistReady, watchlistItems, fetchChartForSymbol]);
+
+  // ─── Public API (same shape as before so components don't change) ─────────────
+
+  // watchlist: string[] of symbols
+  const watchlist = watchlistItems.map(item => item.symbol);
+
+  // stockData: { [symbol]: quote object } -- shaped from StockPrice rows
+  const stockData = {};
+  for (const sp of stockPrices) {
+    stockData[sp.symbol] = {
+      symbol: sp.symbol,
+      name: sp.name,
+      exchange: sp.exchange,
+      currency: sp.currency,
+      currentPrice: sp.price,
+      previousClose: sp.previousClose,
+      change: sp.change,
+      changePercent: sp.changePercent,
+      dayHigh: sp.dayHigh,
+      dayLow: sp.dayLow,
+      volume: sp.volume,
+      lastUpdated: sp.lastUpdated?.toDate?.()?.toLocaleTimeString('en-IN') ?? '',
+    };
+  }
+
+  // alerts: shaped to match the existing AlertsPanel / AlertForm expectations
+  const alertsList = alerts.map(a => ({
+    id: String(a.id),
+    symbol: a.symbol,
+    targetPrice: a.targetPrice,
+    type: a.alertType,
+    active: a.active,
+    createdAt: a.createdAt?.toDate?.()?.toISOString() ?? new Date().toISOString(),
+    triggeredAt: a.triggeredAt?.toDate?.()?.toISOString() ?? null,
+  }));
+
+  const addToWatchlist = useCallback((symbol) => {
+    addToWatchlistReducer({ symbol });
+    // Optimistically fetch chart data immediately
+    fetchChartForSymbol(symbol.trim().toUpperCase());
+  }, [addToWatchlistReducer, fetchChartForSymbol]);
 
   const removeFromWatchlist = useCallback((symbol) => {
-    setWatchlist((prev) => prev.filter((s) => s !== symbol));
-    setStockData((prev) => {
-      const n = { ...prev };
-      delete n[symbol];
-      return n;
-    });
-    setChartData((prev) => {
-      const n = { ...prev };
-      delete n[symbol];
-      return n;
-    });
-    setAlerts((prev) => prev.filter((a) => a.symbol !== symbol));
-    if (wsRef.current) wsRef.current.unsubscribe(symbol);
-  }, []);
+    removeFromWatchlistReducer({ symbol });
+    setChartData(prev => { const n = { ...prev }; delete n[symbol]; return n; });
+    setErrors(prev => { const n = { ...prev }; delete n[symbol]; return n; });
+  }, [removeFromWatchlistReducer]);
 
   const addAlert = useCallback((symbol, targetPrice, type) => {
-    const newAlert = {
-      id: Date.now().toString(),
-      symbol,
-      targetPrice: parseFloat(targetPrice),
-      type,
-      active: true,
-      createdAt: new Date().toISOString(),
-      triggeredAt: null,
-    };
-    setAlerts((prev) => [...prev, newAlert]);
+    addAlertReducer({ symbol, targetPrice: parseFloat(targetPrice), alertType: type });
     toast.info(
-      `Alert set: ${symbol} ${type === "above" ? "≥" : "≤"} ₹${parseFloat(targetPrice).toLocaleString("en-IN")}`,
-      { autoClose: 3000 },
+      `Alert set: ${symbol} ${type === 'above' ? '≥' : '≤'} ₹${parseFloat(targetPrice).toLocaleString('en-IN')}`,
+      { autoClose: 3000 }
     );
-  }, []);
+  }, [addAlertReducer]);
 
   const removeAlert = useCallback((alertId) => {
-    setAlerts((prev) => prev.filter((a) => a.id !== alertId));
+    removeAlertReducer({ alertId: BigInt(alertId) });
     triggeredAlertsRef.current.delete(alertId);
-  }, []);
+  }, [removeAlertReducer]);
 
   const toggleAlert = useCallback((alertId) => {
-    setAlerts((prev) =>
-      prev.map((a) => {
-        if (a.id !== alertId) return a;
-        const newActive = !a.active;
-        if (newActive) triggeredAlertsRef.current.delete(alertId);
-        return {
-          ...a,
-          active: newActive,
-          triggeredAt: newActive ? null : a.triggeredAt,
-        };
-      }),
-    );
-  }, []);
+    toggleAlertReducer({ alertId: BigInt(alertId) });
+  }, [toggleAlertReducer]);
+
+  const refreshStock = useCallback((symbol) => {
+    fetchChartForSymbol(symbol);
+  }, [fetchChartForSymbol]);
 
   return {
     watchlist,
-    alerts,
+    alerts: alertsList,
     stockData,
     chartData,
     loading,
     errors,
-    wsStatus,
+    isConnected: isActive,
     addToWatchlist,
     removeFromWatchlist,
     addAlert,
     removeAlert,
     toggleAlert,
-    refreshStock: fetchStock,
+    refreshStock,
   };
 }

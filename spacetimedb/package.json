@@ -1,0 +1,8 @@
+{
+  "name": "stock-tracker-module",
+  "version": "0.1.0",
+  "private": true,
+  "dependencies": {
+    "spacetimedb": "latest"
+  }
+}

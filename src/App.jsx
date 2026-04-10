@@ -17,7 +17,7 @@ function App() {
     chartData,
     loading,
     errors,
-    wsStatus,
+    isConnected,
     addToWatchlist,
     removeFromWatchlist,
     addAlert,
@@ -38,17 +38,13 @@ function App() {
             <span className="subtitle">NSE & BSE</span>
           </div>
           <div className="header-stats">
-            <span className={`stat ws-status ${wsStatus}`}>
-              {wsStatus === "connected" ? (
+            <span className={`stat ws-status ${isConnected ? "connected" : "disconnected"}`}>
+              {isConnected ? (
                 <Wifi size={14} />
               ) : (
                 <WifiOff size={14} />
               )}
-              {wsStatus === "connected"
-                ? "Live"
-                : wsStatus === "connecting"
-                  ? "Connecting..."
-                  : "Offline"}
+              {isConnected ? "Live" : "Connecting..."}
             </span>
             <span className="stat">
               <LayoutGrid size={14} /> {watchlist.length} stocks
