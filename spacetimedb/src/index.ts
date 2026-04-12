@@ -352,8 +352,6 @@ export const fetchChart = spacetimedb.procedure(
           )
         : undefined;
 
-    console.info("sessionOpenFromBars", sessionOpenFromBars, openSeries);
-
     const currentPrice: number = meta.regularMarketPrice;
     const previousClose: number = meta.chartPreviousClose ?? meta.previousClose;
     const change = currentPrice - previousClose;
