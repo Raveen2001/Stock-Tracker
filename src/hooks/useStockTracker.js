@@ -53,6 +53,8 @@ export function useStockTracker() {
   // ─── Local client-side state (chart data + loading) ──────────────────────────
 
   const [chartData, setChartData] = useState({});
+  /** Extra quote fields from fetchChart (open, 52w) — not stored on stock_price rows. */
+  const [chartQuoteBySymbol, setChartQuoteBySymbol] = useState({});
   const [loading, setLoading] = useState({});
   const [errors, setErrors] = useState({});
 
@@ -100,6 +102,9 @@ export function useStockTracker() {
 
       const parsed = JSON.parse(raw);
       setChartData(prev => ({ ...prev, [symbol]: parsed.priceHistory }));
+      if (parsed.quote) {
+        setChartQuoteBySymbol(prev => ({ ...prev, [symbol]: parsed.quote }));
+      }
     } catch (err) {
       setErrors(prev => ({ ...prev, [symbol]: err.message || 'Failed to fetch chart data' }));
     } finally {
@@ -122,9 +127,18 @@ export function useStockTracker() {
   // watchlist: string[] of symbols
   const watchlist = watchlistItems.map(item => item.symbol);
 
-  // stockData: { [symbol]: quote object } -- shaped from StockPrice rows
+  const finiteOrUndef = (v) => {
+    if (v == null) return undefined;
+    const n = Number(v);
+    return Number.isFinite(n) ? n : undefined;
+  };
+
+  // stockData: { [symbol]: quote object } — SpacetimeDB rows merged with fetchChart quote extras
   const stockData = {};
   for (const sp of stockPrices) {
+    const q = chartQuoteBySymbol[sp.symbol];
+    const openFromQuote = finiteOrUndef(q?.open);
+    const openFromFirstBar = finiteOrUndef(chartData[sp.symbol]?.[0]?.barOpen);
     stockData[sp.symbol] = {
       symbol: sp.symbol,
       name: sp.name,
@@ -138,6 +152,10 @@ export function useStockTracker() {
       dayLow: sp.dayLow,
       volume: sp.volume,
       lastUpdated: sp.lastUpdated?.toDate?.()?.toLocaleTimeString('en-IN') ?? '',
+      // quote.open is often absent from chart meta; first intraday bar's barOpen is session open
+      open: openFromQuote ?? openFromFirstBar,
+      fiftyTwoWeekHigh: q?.fiftyTwoWeekHigh,
+      fiftyTwoWeekLow: q?.fiftyTwoWeekLow,
     };
   }
 
@@ -161,6 +179,7 @@ export function useStockTracker() {
   const removeFromWatchlist = useCallback((symbol) => {
     removeFromWatchlistReducer({ symbol });
     setChartData(prev => { const n = { ...prev }; delete n[symbol]; return n; });
+    setChartQuoteBySymbol(prev => { const n = { ...prev }; delete n[symbol]; return n; });
     setErrors(prev => { const n = { ...prev }; delete n[symbol]; return n; });
   }, [removeFromWatchlistReducer]);
 
@@ -187,6 +206,7 @@ export function useStockTracker() {
 
   return {
     watchlist,
+    watchlistReady,
     alerts: alertsList,
     stockData,
     chartData,

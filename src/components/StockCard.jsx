@@ -70,6 +70,11 @@ export default function StockCard({
             {loading && <RefreshCw size={14} className="spinning" />}
           </div>
           <p className="stock-name">{data.name}</p>
+          <p className="stock-price-meta">
+            {data.lastUpdated
+              ? `Live price updated ${data.lastUpdated}`
+              : 'Live price · waiting for first update…'}
+          </p>
         </div>
 
         <div className="stock-price-section">
@@ -201,9 +206,15 @@ export default function StockCard({
           </div>
 
           <div className="stock-card-footer">
-            <span className="last-updated">Updated: {data.lastUpdated}</span>
+            <span className="last-updated">
+              Live price: {data.lastUpdated || '—'}
+            </span>
             <div className="stock-actions">
-              <button onClick={onRefresh} className="icon-btn" title="Refresh">
+              <button
+                onClick={onRefresh}
+                className="icon-btn"
+                title="Reload intraday chart (live price updates automatically)"
+              >
                 <RefreshCw size={16} />
               </button>
               <button onClick={onRemove} className="icon-btn danger" title="Remove">

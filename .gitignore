@@ -17,7 +17,7 @@
 *.local
 
 # SpacetimeDB
-/src/module_bindings
+# /src/module_bindings
 /spacetimedb/dist
 
 # misc

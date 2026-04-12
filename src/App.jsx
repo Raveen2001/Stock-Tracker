@@ -1,4 +1,4 @@
-import { BarChart3, Bell, LayoutGrid, Wifi, WifiOff } from "lucide-react";
+import { BarChart3, Bell, Info, LayoutGrid, Loader2, Wifi, WifiOff } from "lucide-react";
 import React, { useState } from "react";
 import { ToastContainer } from "react-toastify";
 import "react-toastify/dist/ReactToastify.css";
@@ -12,6 +12,7 @@ function App() {
   const [activeTab, setActiveTab] = useState("watchlist");
   const {
     watchlist,
+    watchlistReady,
     alerts,
     stockData,
     chartData,
@@ -57,61 +58,86 @@ function App() {
       </header>
 
       <main className="app-main">
-        <StockSearch onAdd={addToWatchlist} watchlist={watchlist} />
-
-        <div className="tabs">
-          <button
-            className={`tab ${activeTab === "watchlist" ? "active" : ""}`}
-            onClick={() => setActiveTab("watchlist")}
-          >
-            <LayoutGrid size={16} /> Watchlist ({watchlist.length})
-          </button>
-          <button
-            className={`tab ${activeTab === "alerts" ? "active" : ""}`}
-            onClick={() => setActiveTab("alerts")}
-          >
-            <Bell size={16} /> Alerts
-            {activeAlertCount > 0 && (
-              <span className="alert-count-badge">{activeAlertCount}</span>
-            )}
-          </button>
-        </div>
-
-        {activeTab === "watchlist" && (
-          <div className="watchlist">
-            {watchlist.length === 0 ? (
-              <div className="empty-state">
-                <BarChart3 size={60} strokeWidth={1} />
-                <h2>Your watchlist is empty</h2>
-                <p>Search for stocks above and add them to start tracking</p>
-              </div>
-            ) : (
-              <div className="stock-grid">
-                {watchlist.map((symbol) => (
-                  <StockCard
-                    key={symbol}
-                    data={stockData[symbol]}
-                    chartData={chartData[symbol]}
-                    loading={loading[symbol]}
-                    error={errors[symbol]}
-                    alerts={alerts}
-                    onRemove={() => removeFromWatchlist(symbol)}
-                    onAddAlert={addAlert}
-                    onRefresh={() => refreshStock(symbol)}
-                  />
-                ))}
-              </div>
-            )}
+        {!watchlistReady ? (
+          <div className="home-initial-loading" role="status" aria-live="polite">
+            <Loader2 size={40} className="home-initial-loading-icon spinning" aria-hidden />
+            <p className="home-initial-loading-title">
+              {isConnected ? "Loading your watchlist…" : "Connecting…"}
+            </p>
+            <p className="home-initial-loading-hint">
+              {isConnected
+                ? "Syncing symbols from the server."
+                : "Establishing a live connection to SpacetimeDB."}
+            </p>
           </div>
-        )}
+        ) : (
+          <>
+            <StockSearch onAdd={addToWatchlist} watchlist={watchlist} />
 
-        {activeTab === "alerts" && (
-          <AlertsPanel
-            alerts={alerts}
-            stockData={stockData}
-            onRemove={removeAlert}
-            onToggle={toggleAlert}
-          />
+            <div className="data-refresh-notice" role="status">
+              <Info size={16} className="data-refresh-notice-icon" aria-hidden />
+              <p>
+                Live prices are fetched from the server about every <strong>5 seconds</strong> while
+                you&apos;re connected. Expand a card and use <strong>refresh</strong> to reload that
+                stock&apos;s intraday chart.
+              </p>
+            </div>
+
+            <div className="tabs">
+              <button
+                className={`tab ${activeTab === "watchlist" ? "active" : ""}`}
+                onClick={() => setActiveTab("watchlist")}
+              >
+                <LayoutGrid size={16} /> Watchlist ({watchlist.length})
+              </button>
+              <button
+                className={`tab ${activeTab === "alerts" ? "active" : ""}`}
+                onClick={() => setActiveTab("alerts")}
+              >
+                <Bell size={16} /> Alerts
+                {activeAlertCount > 0 && (
+                  <span className="alert-count-badge">{activeAlertCount}</span>
+                )}
+              </button>
+            </div>
+
+            {activeTab === "watchlist" && (
+              <div className="watchlist">
+                {watchlist.length === 0 ? (
+                  <div className="empty-state">
+                    <BarChart3 size={60} strokeWidth={1} />
+                    <h2>Your watchlist is empty</h2>
+                    <p>Search for stocks above and add them to start tracking</p>
+                  </div>
+                ) : (
+                  <div className="stock-grid">
+                    {watchlist.map((symbol) => (
+                      <StockCard
+                        key={symbol}
+                        data={stockData[symbol]}
+                        chartData={chartData[symbol]}
+                        loading={loading[symbol]}
+                        error={errors[symbol]}
+                        alerts={alerts}
+                        onRemove={() => removeFromWatchlist(symbol)}
+                        onAddAlert={addAlert}
+                        onRefresh={() => refreshStock(symbol)}
+                      />
+                    ))}
+                  </div>
+                )}
+              </div>
+            )}
+
+            {activeTab === "alerts" && (
+              <AlertsPanel
+                alerts={alerts}
+                stockData={stockData}
+                onRemove={removeAlert}
+                onToggle={toggleAlert}
+              />
+            )}
+          </>
         )}
       </main>
 
@@ -123,7 +149,7 @@ function App() {
         position="top-right"
         autoClose={5000}
         newestOnTop
-        theme="dark"
+        theme="light"
       />
     </div>
   );
