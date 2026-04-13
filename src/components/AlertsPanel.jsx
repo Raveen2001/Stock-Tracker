@@ -1,7 +1,9 @@
-import React from 'react';
+import React, { useState } from 'react';
 import { Bell, BellOff, Trash2, ToggleLeft, ToggleRight } from 'lucide-react';
+import ConfirmDialog from './ConfirmDialog';
 
 export default function AlertsPanel({ alerts, stockData, onRemove, onToggle }) {
+  const [confirmId, setConfirmId] = useState(null);
   if (alerts.length === 0) {
     return (
       <div className="alerts-panel empty">
@@ -48,7 +50,7 @@ export default function AlertsPanel({ alerts, stockData, onRemove, onToggle }) {
                     <button onClick={() => onToggle(alert.id)} className="icon-btn" title="Pause alert">
                       <ToggleRight size={20} className="toggle-on" />
                     </button>
-                    <button onClick={() => onRemove(alert.id)} className="icon-btn danger" title="Delete">
+                    <button onClick={() => setConfirmId(alert.id)} className="icon-btn danger" title="Delete">
                       <Trash2 size={14} />
                     </button>
                   </div>
@@ -93,7 +95,7 @@ export default function AlertsPanel({ alerts, stockData, onRemove, onToggle }) {
                   <button onClick={() => onToggle(alert.id)} className="icon-btn" title="Re-enable">
                     <ToggleLeft size={20} className="toggle-off" />
                   </button>
-                  <button onClick={() => onRemove(alert.id)} className="icon-btn danger" title="Delete">
+                  <button onClick={() => setConfirmId(alert.id)} className="icon-btn danger" title="Delete">
                     <Trash2 size={14} />
                   </button>
                 </div>
@@ -101,6 +103,13 @@ export default function AlertsPanel({ alerts, stockData, onRemove, onToggle }) {
             </div>
           ))}
         </div>
+      )}
+      {confirmId && (
+        <ConfirmDialog
+          message="Delete this alert?"
+          onConfirm={() => { onRemove(confirmId); setConfirmId(null); }}
+          onCancel={() => setConfirmId(null)}
+        />
       )}
     </div>
   );

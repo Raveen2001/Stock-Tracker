@@ -10,6 +10,7 @@ import {
 } from 'lucide-react';
 import StockChart from './StockChart';
 import AlertForm from './AlertForm';
+import ConfirmDialog from './ConfirmDialog';
 
 export default function StockCard({
   symbol,
@@ -24,6 +25,7 @@ export default function StockCard({
 }) {
   const [expanded, setExpanded] = useState(false);
   const [showAlertForm, setShowAlertForm] = useState(false);
+  const [confirmRemove, setConfirmRemove] = useState(false);
 
   if (error) {
     return (
@@ -37,11 +39,18 @@ export default function StockCard({
             <button onClick={onRefresh} className="icon-btn" title="Retry">
               <RefreshCw size={16} />
             </button>
-            <button onClick={onRemove} className="icon-btn danger" title="Remove">
+            <button onClick={() => setConfirmRemove(true)} className="icon-btn danger" title="Remove">
               <Trash2 size={16} />
             </button>
           </div>
         </div>
+        {confirmRemove && (
+          <ConfirmDialog
+            message={`Remove ${data?.symbol || symbol || 'this stock'} from your watchlist?`}
+            onConfirm={() => { setConfirmRemove(false); onRemove(); }}
+            onCancel={() => setConfirmRemove(false)}
+          />
+        )}
       </div>
     );
   }
@@ -218,12 +227,19 @@ export default function StockCard({
               >
                 <RefreshCw size={16} />
               </button>
-              <button onClick={onRemove} className="icon-btn danger" title="Remove">
+              <button onClick={() => setConfirmRemove(true)} className="icon-btn danger" title="Remove">
                 <Trash2 size={16} />
               </button>
             </div>
           </div>
         </div>
+      )}
+      {confirmRemove && (
+        <ConfirmDialog
+          message={`Remove ${data?.symbol || symbol} from your watchlist?`}
+          onConfirm={() => { setConfirmRemove(false); onRemove(); }}
+          onCancel={() => setConfirmRemove(false)}
+        />
       )}
     </div>
   );
