@@ -2,7 +2,7 @@ import React, { useState } from "react";
 import { Loader2, LogIn, UserPlus } from "lucide-react";
 
 export default function LoginForm({ onSubmit, error }) {
-  const [isRegister, setIsRegister] = useState(true);
+  const [isRegister, setIsRegister] = useState(false);
   const [phone, setPhone] = useState("");
   const [password, setPassword] = useState("");
   const [submitting, setSubmitting] = useState(false);
