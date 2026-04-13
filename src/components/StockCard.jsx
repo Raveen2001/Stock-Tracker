@@ -12,6 +12,7 @@ import StockChart from './StockChart';
 import AlertForm from './AlertForm';
 
 export default function StockCard({
+  symbol,
   data,
   chartData,
   loading,
@@ -29,7 +30,7 @@ export default function StockCard({
       <div className="stock-card stock-card-error">
         <div className="stock-card-header">
           <div>
-            <h3 className="stock-symbol">{data?.symbol || 'Unknown'}</h3>
+            <h3 className="stock-symbol">{data?.symbol || symbol || 'Unknown'}</h3>
             <p className="stock-error-msg">{error}</p>
           </div>
           <div className="stock-actions">

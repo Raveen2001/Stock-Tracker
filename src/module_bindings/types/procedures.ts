@@ -7,7 +7,13 @@ import { type Infer as __Infer } from "spacetimedb";
 
 // Import all procedure arg schemas
 import * as FetchChartProcedure from "../fetch_chart_procedure";
+import * as GetMyPhoneProcedure from "../get_my_phone_procedure";
+import * as GetMyTelegramChatIdProcedure from "../get_my_telegram_chat_id_procedure";
 
 export type FetchChartArgs = __Infer<typeof FetchChartProcedure.params>;
 export type FetchChartResult = __Infer<typeof FetchChartProcedure.returnType>;
+export type GetMyPhoneArgs = __Infer<typeof GetMyPhoneProcedure.params>;
+export type GetMyPhoneResult = __Infer<typeof GetMyPhoneProcedure.returnType>;
+export type GetMyTelegramChatIdArgs = __Infer<typeof GetMyTelegramChatIdProcedure.params>;
+export type GetMyTelegramChatIdResult = __Infer<typeof GetMyTelegramChatIdProcedure.returnType>;
 

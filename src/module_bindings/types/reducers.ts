@@ -8,13 +8,19 @@ import { type Infer as __Infer } from "spacetimedb";
 // Import all reducer arg schemas
 import AddAlertReducer from "../add_alert_reducer";
 import AddToWatchlistReducer from "../add_to_watchlist_reducer";
+import RegisterPhoneReducer from "../register_phone_reducer";
 import RemoveAlertReducer from "../remove_alert_reducer";
 import RemoveFromWatchlistReducer from "../remove_from_watchlist_reducer";
+import SetBotConfigReducer from "../set_bot_config_reducer";
+import SetTelegramChatIdReducer from "../set_telegram_chat_id_reducer";
 import ToggleAlertReducer from "../toggle_alert_reducer";
 
 export type AddAlertParams = __Infer<typeof AddAlertReducer>;
 export type AddToWatchlistParams = __Infer<typeof AddToWatchlistReducer>;
+export type RegisterPhoneParams = __Infer<typeof RegisterPhoneReducer>;
 export type RemoveAlertParams = __Infer<typeof RemoveAlertReducer>;
 export type RemoveFromWatchlistParams = __Infer<typeof RemoveFromWatchlistReducer>;
+export type SetBotConfigParams = __Infer<typeof SetBotConfigReducer>;
+export type SetTelegramChatIdParams = __Infer<typeof SetTelegramChatIdReducer>;
 export type ToggleAlertParams = __Infer<typeof ToggleAlertReducer>;
 

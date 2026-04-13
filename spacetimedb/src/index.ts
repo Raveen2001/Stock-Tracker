@@ -68,11 +68,40 @@ const priceFetchSchedule = table(
   },
 );
 
+/**
+ * One row per SpacetimeDB identity. Phone is private (not client-subscribable).
+ * Used for cross-device watchlist recovery when the user re-enters the same number.
+ */
+const userProfile = table(
+  { name: "user_profile", public: false },
+  {
+    identity: t.identity().primaryKey(),
+    phone: t.string(),
+    telegramChatId: t.string().optional(),
+    registeredAt: t.timestamp(),
+  },
+);
+
+/**
+ * Singleton config row for the Telegram bot token.
+ * Private so it's never exposed to clients. Set via the setBotToken reducer
+ * after publishing (e.g. `spacetime call stock-tracker set_bot_token '{"key":"telegram","value":"BOT_TOKEN"}'`).
+ */
+const botConfig = table(
+  { name: "bot_config", public: false },
+  {
+    key: t.string().primaryKey(),
+    value: t.string(),
+  },
+);
+
 const spacetimedb = schema({
   stockPrice,
   watchlistItem,
   alert,
   priceFetchSchedule,
+  userProfile,
+  botConfig,
 });
 export default spacetimedb;
 
@@ -196,6 +225,160 @@ export const toggleAlert = spacetimedb.reducer(
   },
 );
 
+// ─── User profile (phone) + cross-device merge ────────────────────────────────
+
+/** Digits only, 10–15 length (E.164-style without +). */
+function normalizePhone(raw: string): string {
+  return raw.replace(/\D/g, "");
+}
+
+/**
+ * Saves phone for the caller. If another identity already used this number,
+ * watchlist rows and alerts are merged onto the caller and the old profile row is removed.
+ */
+export const registerPhone = spacetimedb.reducer(
+  { phone: t.string() },
+  (ctx, { phone }) => {
+    const phoneNorm = normalizePhone(phone);
+    if (!phoneNorm) throw new SenderError("Phone must not be empty");
+    if (phoneNorm.length < 10 || phoneNorm.length > 15) {
+      throw new SenderError("Phone must be 10–15 digits");
+    }
+
+    const mine = ctx.db.userProfile.identity.find(ctx.sender);
+    if (mine && mine.phone === phoneNorm) {
+      return;
+    }
+
+    let otherIdentity: typeof ctx.sender | null = null;
+    for (const p of ctx.db.userProfile.iter()) {
+      if (p.phone === phoneNorm && !p.identity.isEqual(ctx.sender)) {
+        otherIdentity = p.identity;
+        break;
+      }
+    }
+
+    if (otherIdentity) {
+      const watchlistIdsToRemove: bigint[] = [];
+      const symbolsToAdd: string[] = [];
+
+      for (const item of ctx.db.watchlistItem.iter()) {
+        if (!item.owner.isEqual(otherIdentity)) continue;
+        watchlistIdsToRemove.push(item.id);
+        let senderHas = false;
+        for (const i2 of ctx.db.watchlistItem.iter()) {
+          if (i2.owner.isEqual(ctx.sender) && i2.symbol === item.symbol) {
+            senderHas = true;
+            break;
+          }
+        }
+        if (!senderHas) symbolsToAdd.push(item.symbol);
+      }
+
+      for (const id of watchlistIdsToRemove) {
+        ctx.db.watchlistItem.id.delete(id);
+      }
+      for (const sym of symbolsToAdd) {
+        ctx.db.watchlistItem.insert({ id: 0n, owner: ctx.sender, symbol: sym });
+      }
+
+      for (const a of ctx.db.alert.iter()) {
+        if (a.owner.isEqual(otherIdentity)) {
+          ctx.db.alert.id.update({ ...a, owner: ctx.sender });
+        }
+      }
+
+      ctx.db.userProfile.identity.delete(otherIdentity);
+    }
+
+    const now = ctx.timestamp;
+    if (mine) {
+      ctx.db.userProfile.identity.update({
+        ...mine,
+        phone: phoneNorm,
+      });
+    } else {
+      ctx.db.userProfile.insert({
+        identity: ctx.sender,
+        phone: phoneNorm,
+        telegramChatId: undefined,
+        registeredAt: now,
+      });
+    }
+  },
+);
+
+/**
+ * Returns the registered phone for the calling identity, or empty string if none.
+ * (Private `user_profile` is not subscribable from clients.)
+ */
+export const getMyPhone = spacetimedb.procedure(t.string(), (ctx, _args) =>
+  ctx.withTx((tx) => {
+    const row = tx.db.userProfile.identity.find(ctx.sender);
+    return row?.phone ?? "";
+  }),
+);
+
+// ─── Telegram Chat ID ────────────────────────────────────────────────────────
+
+export const setTelegramChatId = spacetimedb.reducer(
+  { chatId: t.string() },
+  (ctx, { chatId }) => {
+    const trimmed = chatId.trim();
+    if (!trimmed) throw new SenderError("Chat ID must not be empty");
+
+    const mine = ctx.db.userProfile.identity.find(ctx.sender);
+    if (!mine) {
+      throw new SenderError(
+        "Register your phone number first before setting a Telegram chat ID",
+      );
+    }
+
+    ctx.db.userProfile.identity.update({
+      ...mine,
+      telegramChatId: trimmed,
+    });
+    console.info(
+      `${ctx.sender.toHexString().substring(0, 8)} set Telegram chat ID`,
+    );
+  },
+);
+
+export const getMyTelegramChatId = spacetimedb.procedure(
+  t.string(),
+  (ctx, _args) =>
+    ctx.withTx((tx) => {
+      const row = tx.db.userProfile.identity.find(ctx.sender);
+      return row?.telegramChatId ?? "";
+    }),
+);
+
+// ─── Bot Config ──────────────────────────────────────────────────────────────
+
+/**
+ * Store a config value (e.g. Telegram bot token) in the private bot_config table.
+ * Call once after publishing:
+ *   spacetime call stock-tracker set_bot_config '{"key":"telegram_bot_token","value":"YOUR_TOKEN"}'
+ */
+export const setBotConfig = spacetimedb.reducer(
+  { key: t.string(), value: t.string() },
+  (ctx, { key, value }) => {
+    const trimmedKey = key.trim();
+    const trimmedValue = value.trim();
+    if (!trimmedKey || !trimmedValue) {
+      throw new SenderError("Key and value must not be empty");
+    }
+
+    const existing = ctx.db.botConfig.key.find(trimmedKey);
+    if (existing) {
+      ctx.db.botConfig.key.update({ key: trimmedKey, value: trimmedValue });
+    } else {
+      ctx.db.botConfig.insert({ key: trimmedKey, value: trimmedValue });
+    }
+    console.info(`Bot config "${trimmedKey}" updated by ${ctx.sender.toHexString().substring(0, 8)}`);
+  },
+);
+
 // ─── Scheduled Procedure: fetch_prices ───────────────────────────────────────
 
 const YAHOO_HEADERS = {
@@ -283,7 +466,18 @@ export const fetchPrices = spacetimedb.procedure(
 
     if (results.length === 0) return {};
 
-    // 3. Write phase: upsert prices and trigger alerts in a single transaction
+    // 3. Write phase: upsert prices and trigger alerts in a single transaction.
+    //    Collect triggered alerts so we can send Telegram messages outside the tx.
+    const triggeredAlerts: Array<{
+      ownerHex: string;
+      symbol: string;
+      alertType: string;
+      targetPrice: number;
+      currentPrice: number;
+      currency: string;
+      chatId: string;
+    }> = [];
+
     ctx.withTx((tx) => {
       const now = tx.timestamp;
 
@@ -295,7 +489,6 @@ export const fetchPrices = spacetimedb.procedure(
           tx.db.stockPrice.insert({ ...r, lastUpdated: now });
         }
 
-        // Check active alerts for this symbol
         for (const a of tx.db.alert.iter()) {
           if (!a.active || a.symbol !== r.symbol) continue;
 
@@ -308,10 +501,123 @@ export const fetchPrices = spacetimedb.procedure(
             console.info(
               `Alert triggered: ${r.symbol} ${a.alertType} ${a.targetPrice} (current: ${r.price})`,
             );
+
+            const profile = tx.db.userProfile.identity.find(a.owner);
+            if (profile?.telegramChatId) {
+              triggeredAlerts.push({
+                ownerHex: a.owner.toHexString().substring(0, 8),
+                symbol: r.symbol,
+                alertType: a.alertType,
+                targetPrice: a.targetPrice,
+                currentPrice: r.price,
+                currency: r.currency,
+                chatId: profile.telegramChatId,
+              });
+            }
           }
         }
       }
     });
+
+    // 4. Read Telegram config from bot_config table
+    let botToken: string | undefined;
+    let watchlistUpdatesEnabled = false;
+    ctx.withTx((tx) => {
+      botToken = tx.db.botConfig.key.find("telegram_bot_token")?.value;
+      watchlistUpdatesEnabled =
+        tx.db.botConfig.key.find("telegram_watchlist_updates")?.value === "true";
+    });
+
+    if (!botToken) return {};
+
+    // 5. Send Telegram notifications for triggered alerts
+    for (const ta of triggeredAlerts) {
+      try {
+        const dot = ta.alertType === "above" ? "🟢" : "🔴";
+        const shortSym = ta.symbol.replace(".NS", "").replace(".BO", "");
+
+        const text =
+          `${dot} <b>${shortSym}</b> hit <code>${ta.currency} ${ta.currentPrice.toLocaleString()}</code>\n` +
+          `Target: <code>${ta.currency} ${ta.targetPrice.toLocaleString()}</code>`;
+
+        const res = ctx.http.fetch(
+          `https://api.telegram.org/bot${botToken}/sendMessage`,
+          {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              chat_id: ta.chatId,
+              text,
+              parse_mode: "HTML",
+            }),
+          },
+        );
+
+        if (res.status !== 200) {
+          console.warn(
+            `Telegram send failed for ${ta.ownerHex}: HTTP ${res.status}`,
+          );
+        }
+      } catch (e) {
+        console.error(`Telegram send error for ${ta.ownerHex}:`, e);
+      }
+    }
+
+    // 6. Send watchlist price summary (controlled by telegram_watchlist_updates flag)
+    if (watchlistUpdatesEnabled) {
+      const userWatchlists = new Map<
+        string,
+        { chatId: string; symbols: string[] }
+      >();
+      ctx.withTx((tx) => {
+        for (const profile of tx.db.userProfile.iter()) {
+          if (!profile.telegramChatId) continue;
+          const syms: string[] = [];
+          for (const item of tx.db.watchlistItem.iter()) {
+            if (item.owner.isEqual(profile.identity)) {
+              syms.push(item.symbol);
+            }
+          }
+          if (syms.length > 0) {
+            userWatchlists.set(profile.telegramChatId, {
+              chatId: profile.telegramChatId,
+              symbols: syms,
+            });
+          }
+        }
+      });
+
+      for (const [, user] of userWatchlists) {
+        const lines = user.symbols.map((sym) => {
+          const r = results.find((res) => res.symbol === sym);
+          const shortSym = sym.replace(".NS", "").replace(".BO", "");
+          if (!r) return `⚪ ${shortSym} — no data`;
+          const dot = r.change >= 0 ? "🟢" : "🔴";
+          const sign = r.change >= 0 ? "+" : "";
+          return `${dot} <b>${shortSym}</b>  <code>${r.currency} ${r.price.toFixed(2)}</code>  ${sign}${r.changePercent.toFixed(2)}%`;
+        });
+
+        const text =
+          `📊 <b>Watchlist</b>\n\n` + lines.join("\n");
+
+        try {
+          ctx.http.fetch(
+            `https://api.telegram.org/bot${botToken}/sendMessage`,
+            {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({
+                chat_id: user.chatId,
+                text,
+                parse_mode: "HTML",
+              }),
+            },
+          );
+        } catch (e) {
+          console.error(`Telegram watchlist update failed:`, e);
+        }
+      }
+    }
 
     return {};
   },

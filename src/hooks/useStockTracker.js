@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { toast } from 'react-toastify';
 import { useSpacetimeDB, useTable, useReducer } from 'spacetimedb/react';
 import { tables, reducers } from '../module_bindings/index.ts';
+import posthog from '../posthog';
 
 export function useStockTracker() {
   const { identity, isActive, getConnection } = useSpacetimeDB();
@@ -45,6 +46,17 @@ export function useStockTracker() {
           if ('Notification' in window && Notification.permission === 'granted') {
             new Notification('Stock Alert!', { body: message, icon: '/favicon.ico' });
           }
+
+          posthog.capture({
+            distinctId: identity?.toHexString() ?? 'anonymous',
+            event: 'alert triggered',
+            properties: {
+              symbol: newAlert.symbol,
+              alert_type: newAlert.alertType,
+              target_price: newAlert.targetPrice,
+              triggered_price: price ?? null,
+            },
+          });
         }
       },
     }
@@ -75,6 +87,147 @@ export function useStockTracker() {
   const addAlertReducer = useReducer(reducers.addAlert);
   const removeAlertReducer = useReducer(reducers.removeAlert);
   const toggleAlertReducer = useReducer(reducers.toggleAlert);
+  const registerPhoneReducer = useReducer(reducers.registerPhone);
+  const setTelegramChatIdReducer = useReducer(reducers.setTelegramChatId);
+
+  // ─── Phone profile (private user_profile on server) ───────────────────────────
+
+  const [profilePhone, setProfilePhone] = useState(null);
+  const [profileChecked, setProfileChecked] = useState(false);
+
+  useEffect(() => {
+    if (!isActive || !identity) {
+      setProfilePhone(null);
+      setProfileChecked(false);
+      return;
+    }
+
+    const cacheKey = `st_profile_phone_${identity.toHexString()}`;
+
+    let cancelled = false;
+    (async () => {
+      try {
+        const conn = getConnection();
+        if (!conn) {
+          if (!cancelled) setProfilePhone('');
+          return;
+        }
+        const phone = await conn.procedures.getMyPhone({});
+        if (cancelled) return;
+        if (phone) {
+          sessionStorage.setItem(cacheKey, phone);
+          setProfilePhone(phone);
+        } else {
+          sessionStorage.removeItem(cacheKey);
+          sessionStorage.removeItem(`st_telegram_chat_id_${identity.toHexString()}`);
+          setProfilePhone('');
+        }
+      } catch (e) {
+        console.error('getMyPhone failed:', e);
+        if (!cancelled) setProfilePhone('');
+      } finally {
+        if (!cancelled) setProfileChecked(true);
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [isActive, identity, getConnection]);
+
+  const submitProfilePhone = useCallback(
+    (phoneRaw) => {
+      const trimmed = phoneRaw.trim();
+      if (!trimmed) {
+        toast.error('Please enter a phone number');
+        return;
+      }
+      const digits = trimmed.replace(/\D/g, '');
+      if (digits.length < 10 || digits.length > 15) {
+        toast.error('Enter a valid phone number (10–15 digits)');
+        return;
+      }
+      try {
+        registerPhoneReducer({ phone: trimmed });
+        if (identity) {
+          sessionStorage.setItem(`st_profile_phone_${identity.toHexString()}`, digits);
+        }
+        setProfilePhone(digits);
+        posthog.capture({
+          distinctId: identity?.toHexString() ?? 'anonymous',
+          event: 'profile phone registered',
+          properties: { phone_length: digits.length },
+        });
+      } catch (e) {
+        console.error(e);
+        toast.error(e?.message || 'Could not save phone number');
+      }
+    },
+    [registerPhoneReducer, identity],
+  );
+
+  // ─── Telegram Chat ID (private user_profile on server) ─────────────────────────
+
+  const [telegramChatId, setTelegramChatId] = useState(null);
+
+  useEffect(() => {
+    if (!isActive || !identity) {
+      setTelegramChatId(null);
+      return;
+    }
+
+    const cacheKey = `st_telegram_chat_id_${identity.toHexString()}`;
+
+    let cancelled = false;
+    (async () => {
+      try {
+        const conn = getConnection();
+        if (!conn) return;
+        const chatId = await conn.procedures.getMyTelegramChatId({});
+        if (cancelled) return;
+        if (chatId) {
+          sessionStorage.setItem(cacheKey, chatId);
+          setTelegramChatId(chatId);
+        } else {
+          sessionStorage.removeItem(cacheKey);
+          setTelegramChatId('');
+        }
+      } catch (e) {
+        console.error('getMyTelegramChatId failed:', e);
+        if (!cancelled) setTelegramChatId('');
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [isActive, identity, getConnection]);
+
+  const submitTelegramChatId = useCallback(
+    (chatId) => {
+      const trimmed = chatId.trim();
+      if (!trimmed) {
+        toast.error('Please enter a Telegram Chat ID');
+        return;
+      }
+      try {
+        setTelegramChatIdReducer({ chatId: trimmed });
+        if (identity) {
+          sessionStorage.setItem(`st_telegram_chat_id_${identity.toHexString()}`, trimmed);
+        }
+        setTelegramChatId(trimmed);
+        toast.success('Telegram Chat ID saved');
+        posthog.capture({
+          distinctId: identity?.toHexString() ?? 'anonymous',
+          event: 'telegram chat id set',
+        });
+      } catch (e) {
+        console.error(e);
+        toast.error(e?.message || 'Could not save Telegram Chat ID');
+      }
+    },
+    [setTelegramChatIdReducer, identity],
+  );
 
   // ─── Notification permission ──────────────────────────────────────────────────
 
@@ -107,10 +260,19 @@ export function useStockTracker() {
       }
     } catch (err) {
       setErrors(prev => ({ ...prev, [symbol]: err.message || 'Failed to fetch chart data' }));
+      posthog.capture({
+        distinctId: identity?.toHexString() ?? 'anonymous',
+        event: 'chart fetch failed',
+        properties: {
+          symbol,
+          error: err.message || 'Failed to fetch chart data',
+        },
+      });
+      posthog.captureException(err, identity?.toHexString() ?? 'anonymous');
     } finally {
       setLoading(prev => ({ ...prev, [symbol]: false }));
     }
-  }, [getConnection]);
+  }, [getConnection, identity]);
 
   // Fetch chart data for all watchlist items on initial connection
   const hasFetchedInitial = useRef(false);
@@ -174,14 +336,24 @@ export function useStockTracker() {
     addToWatchlistReducer({ symbol });
     // Optimistically fetch chart data immediately
     fetchChartForSymbol(symbol.trim().toUpperCase());
-  }, [addToWatchlistReducer, fetchChartForSymbol]);
+    posthog.capture({
+      distinctId: identity?.toHexString() ?? 'anonymous',
+      event: 'stock added',
+      properties: { symbol: symbol.trim().toUpperCase() },
+    });
+  }, [addToWatchlistReducer, fetchChartForSymbol, identity]);
 
   const removeFromWatchlist = useCallback((symbol) => {
     removeFromWatchlistReducer({ symbol });
     setChartData(prev => { const n = { ...prev }; delete n[symbol]; return n; });
     setChartQuoteBySymbol(prev => { const n = { ...prev }; delete n[symbol]; return n; });
     setErrors(prev => { const n = { ...prev }; delete n[symbol]; return n; });
-  }, [removeFromWatchlistReducer]);
+    posthog.capture({
+      distinctId: identity?.toHexString() ?? 'anonymous',
+      event: 'stock removed',
+      properties: { symbol },
+    });
+  }, [removeFromWatchlistReducer, identity]);
 
   const addAlert = useCallback((symbol, targetPrice, type) => {
     addAlertReducer({ symbol, targetPrice: parseFloat(targetPrice), alertType: type });
@@ -189,20 +361,44 @@ export function useStockTracker() {
       `Alert set: ${symbol} ${type === 'above' ? '≥' : '≤'} ₹${parseFloat(targetPrice).toLocaleString('en-IN')}`,
       { autoClose: 3000 }
     );
-  }, [addAlertReducer]);
+    posthog.capture({
+      distinctId: identity?.toHexString() ?? 'anonymous',
+      event: 'alert created',
+      properties: {
+        symbol,
+        target_price: parseFloat(targetPrice),
+        alert_type: type,
+      },
+    });
+  }, [addAlertReducer, identity]);
 
   const removeAlert = useCallback((alertId) => {
     removeAlertReducer({ alertId: BigInt(alertId) });
     triggeredAlertsRef.current.delete(alertId);
-  }, [removeAlertReducer]);
+    posthog.capture({
+      distinctId: identity?.toHexString() ?? 'anonymous',
+      event: 'alert removed',
+      properties: { alert_id: alertId },
+    });
+  }, [removeAlertReducer, identity]);
 
   const toggleAlert = useCallback((alertId) => {
     toggleAlertReducer({ alertId: BigInt(alertId) });
-  }, [toggleAlertReducer]);
+    posthog.capture({
+      distinctId: identity?.toHexString() ?? 'anonymous',
+      event: 'alert toggled',
+      properties: { alert_id: alertId },
+    });
+  }, [toggleAlertReducer, identity]);
 
   const refreshStock = useCallback((symbol) => {
     fetchChartForSymbol(symbol);
-  }, [fetchChartForSymbol]);
+    posthog.capture({
+      distinctId: identity?.toHexString() ?? 'anonymous',
+      event: 'chart refreshed',
+      properties: { symbol },
+    });
+  }, [fetchChartForSymbol, identity]);
 
   return {
     watchlist,
@@ -219,5 +415,11 @@ export function useStockTracker() {
     removeAlert,
     toggleAlert,
     refreshStock,
+    profileResolved: profileChecked,
+    needsPhonePrompt: profileChecked && profilePhone === '',
+    profilePhone: profilePhone && profilePhone.length > 0 ? profilePhone : null,
+    submitProfilePhone,
+    telegramChatId: telegramChatId || null,
+    submitTelegramChatId,
   };
 }

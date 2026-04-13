@@ -1,10 +1,15 @@
 import React from 'react';
 import { Bell, BellOff, Trash2, ToggleLeft, ToggleRight } from 'lucide-react';
+import TelegramSettings from './TelegramSettings';
 
-export default function AlertsPanel({ alerts, stockData, onRemove, onToggle }) {
+export default function AlertsPanel({ alerts, stockData, onRemove, onToggle, telegramChatId, onSaveTelegramChatId }) {
   if (alerts.length === 0) {
     return (
       <div className="alerts-panel empty">
+        <TelegramSettings
+          telegramChatId={telegramChatId}
+          onSave={onSaveTelegramChatId}
+        />
         <BellOff size={40} strokeWidth={1.5} />
         <p>No alerts set yet</p>
         <p className="hint">Expand a stock card and click "Set Alert" to get started</p>
@@ -17,6 +22,11 @@ export default function AlertsPanel({ alerts, stockData, onRemove, onToggle }) {
 
   return (
     <div className="alerts-panel">
+      <TelegramSettings
+        telegramChatId={telegramChatId}
+        onSave={onSaveTelegramChatId}
+      />
+
       <h3>
         <Bell size={18} /> All Alerts ({alerts.length})
       </h3>

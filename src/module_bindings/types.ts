@@ -22,6 +22,12 @@ export const Alert = __t.object("Alert", {
 });
 export type Alert = __Infer<typeof Alert>;
 
+export const BotConfig = __t.object("BotConfig", {
+  key: __t.string(),
+  value: __t.string(),
+});
+export type BotConfig = __Infer<typeof BotConfig>;
+
 export const PriceFetchSchedule = __t.object("PriceFetchSchedule", {
   scheduledId: __t.u64(),
   scheduledAt: __t.scheduleAt(),
@@ -43,6 +49,14 @@ export const StockPrice = __t.object("StockPrice", {
   lastUpdated: __t.timestamp(),
 });
 export type StockPrice = __Infer<typeof StockPrice>;
+
+export const UserProfile = __t.object("UserProfile", {
+  identity: __t.identity(),
+  phone: __t.string(),
+  telegramChatId: __t.option(__t.string()),
+  registeredAt: __t.timestamp(),
+});
+export type UserProfile = __Infer<typeof UserProfile>;
 
 export const WatchlistItem = __t.object("WatchlistItem", {
   id: __t.u64(),

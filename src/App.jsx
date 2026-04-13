@@ -4,8 +4,10 @@ import { ToastContainer } from "react-toastify";
 import "react-toastify/dist/ReactToastify.css";
 import "./App.css";
 import AlertsPanel from "./components/AlertsPanel";
+import PhonePrompt from "./components/PhonePrompt";
 import StockCard from "./components/StockCard";
 import StockSearch from "./components/StockSearch";
+import TelegramSettings from "./components/TelegramSettings";
 import { useStockTracker } from "./hooks/useStockTracker";
 
 function App() {
@@ -25,12 +27,20 @@ function App() {
     removeAlert,
     toggleAlert,
     refreshStock,
+    profileResolved,
+    needsPhonePrompt,
+    submitProfilePhone,
+    telegramChatId,
+    submitTelegramChatId,
   } = useStockTracker();
 
   const activeAlertCount = alerts.filter((a) => a.active).length;
 
   return (
     <div className="app">
+      {profileResolved && needsPhonePrompt ? (
+        <PhonePrompt onSubmit={submitProfilePhone} />
+      ) : null}
       <header className="app-header">
         <div className="header-content">
           <div className="logo">
@@ -58,7 +68,19 @@ function App() {
       </header>
 
       <main className="app-main">
-        {!watchlistReady ? (
+        {!profileResolved ? (
+          <div className="home-initial-loading" role="status" aria-live="polite">
+            <Loader2 size={40} className="home-initial-loading-icon spinning" aria-hidden />
+            <p className="home-initial-loading-title">
+              {isConnected ? "Loading your profile…" : "Connecting…"}
+            </p>
+            <p className="home-initial-loading-hint">
+              {isConnected
+                ? "Checking your account."
+                : "Establishing a live connection to SpacetimeDB."}
+            </p>
+          </div>
+        ) : needsPhonePrompt ? null : !watchlistReady ? (
           <div className="home-initial-loading" role="status" aria-live="polite">
             <Loader2 size={40} className="home-initial-loading-icon spinning" aria-hidden />
             <p className="home-initial-loading-title">
@@ -103,6 +125,10 @@ function App() {
 
             {activeTab === "watchlist" && (
               <div className="watchlist">
+                <TelegramSettings
+                  telegramChatId={telegramChatId}
+                  onSave={submitTelegramChatId}
+                />
                 {watchlist.length === 0 ? (
                   <div className="empty-state">
                     <BarChart3 size={60} strokeWidth={1} />
@@ -114,6 +140,7 @@ function App() {
                     {watchlist.map((symbol) => (
                       <StockCard
                         key={symbol}
+                        symbol={symbol}
                         data={stockData[symbol]}
                         chartData={chartData[symbol]}
                         loading={loading[symbol]}
@@ -135,6 +162,8 @@ function App() {
                 stockData={stockData}
                 onRemove={removeAlert}
                 onToggle={toggleAlert}
+                telegramChatId={telegramChatId}
+                onSaveTelegramChatId={submitTelegramChatId}
               />
             )}
           </>

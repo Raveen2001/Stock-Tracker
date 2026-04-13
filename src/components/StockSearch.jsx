@@ -1,6 +1,7 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { Search, Plus, Loader } from 'lucide-react';
 import { searchStocks } from '../services/stockApi';
+import posthog from '../posthog';
 
 export default function StockSearch({ onAdd, watchlist }) {
   const [query, setQuery] = useState('');
@@ -41,6 +42,14 @@ export default function StockSearch({ onAdd, watchlist }) {
       setResults(matches);
       setShowDropdown(true);
       setSearching(false);
+      posthog.capture({
+        distinctId: 'anonymous',
+        event: 'stock searched',
+        properties: {
+          query: value,
+          result_count: matches.length,
+        },
+      });
     }, 300);
   };
 
@@ -49,6 +58,15 @@ export default function StockSearch({ onAdd, watchlist }) {
     setQuery('');
     setResults([]);
     setShowDropdown(false);
+    posthog.capture({
+      distinctId: 'anonymous',
+      event: 'stock search result selected',
+      properties: {
+        symbol: stock.symbol,
+        name: stock.name,
+        exchange: stock.exchange,
+      },
+    });
   };
 
   return (
