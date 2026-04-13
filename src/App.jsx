@@ -1,4 +1,12 @@
-import { BarChart3, Bell, Info, LayoutGrid, Loader2, Wifi, WifiOff } from "lucide-react";
+import {
+  BarChart3,
+  Bell,
+  Info,
+  LayoutGrid,
+  Loader2,
+  Wifi,
+  WifiOff,
+} from "lucide-react";
 import React, { useState } from "react";
 import { ToastContainer } from "react-toastify";
 import "react-toastify/dist/ReactToastify.css";
@@ -50,12 +58,10 @@ function App() {
             <span className="subtitle">NSE & BSE</span>
           </div>
           <div className="header-stats">
-            <span className={`stat ws-status ${isConnected ? "connected" : "disconnected"}`}>
-              {isConnected ? (
-                <Wifi size={14} />
-              ) : (
-                <WifiOff size={14} />
-              )}
+            <span
+              className={`stat ws-status ${isConnected ? "connected" : "disconnected"}`}
+            >
+              {isConnected ? <Wifi size={14} /> : <WifiOff size={14} />}
               {isConnected ? "Live" : "Connecting..."}
             </span>
             <span className="stat">
@@ -70,8 +76,16 @@ function App() {
 
       <main className="app-main">
         {!profileResolved ? (
-          <div className="home-initial-loading" role="status" aria-live="polite">
-            <Loader2 size={40} className="home-initial-loading-icon spinning" aria-hidden />
+          <div
+            className="home-initial-loading"
+            role="status"
+            aria-live="polite"
+          >
+            <Loader2
+              size={40}
+              className="home-initial-loading-icon spinning"
+              aria-hidden
+            />
             <p className="home-initial-loading-title">
               {isConnected ? "Loading your profile…" : "Connecting…"}
             </p>
@@ -82,8 +96,16 @@ function App() {
             </p>
           </div>
         ) : needsLogin ? null : !watchlistReady ? (
-          <div className="home-initial-loading" role="status" aria-live="polite">
-            <Loader2 size={40} className="home-initial-loading-icon spinning" aria-hidden />
+          <div
+            className="home-initial-loading"
+            role="status"
+            aria-live="polite"
+          >
+            <Loader2
+              size={40}
+              className="home-initial-loading-icon spinning"
+              aria-hidden
+            />
             <p className="home-initial-loading-title">
               {isConnected ? "Loading your watchlist…" : "Connecting…"}
             </p>
@@ -126,7 +148,9 @@ function App() {
                   <div className="empty-state">
                     <BarChart3 size={60} strokeWidth={1} />
                     <h2>Your watchlist is empty</h2>
-                    <p>Search for stocks above and add them to start tracking</p>
+                    <p>
+                      Search for stocks above and add them to start tracking
+                    </p>
                   </div>
                 ) : (
                   <div className="stock-grid">
@@ -159,10 +183,15 @@ function App() {
             )}
 
             <div className="data-refresh-notice" role="status">
-              <Info size={16} className="data-refresh-notice-icon" aria-hidden />
+              <Info
+                size={16}
+                className="data-refresh-notice-icon"
+                aria-hidden
+              />
               <p>
-                Live prices are fetched from the server about every <strong>5 seconds</strong> while
-                you&apos;re connected. Expand a card and use <strong>refresh</strong> to reload that
+                Live prices are fetched from the server about every{" "}
+                <strong>5 seconds</strong> while you&apos;re connected. Expand a
+                card and use <strong>refresh</strong> to reload that
                 stock&apos;s intraday chart.
               </p>
             </div>

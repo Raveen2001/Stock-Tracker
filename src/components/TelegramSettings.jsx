@@ -76,19 +76,9 @@ export default function TelegramSettings({
           >
             @raveen_stock_tracker_bot <ExternalLink size={12} />
           </a>{" "}
-          on Telegram and send <code>/start</code>.
+          on Telegram and send <code>/start</code> — the bot will reply with your Chat ID.
           <br />
-          <strong>2.</strong> Message{" "}
-          <a
-            href="https://t.me/userinfobot"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            @userinfobot <ExternalLink size={12} />
-          </a>{" "}
-          to get your Chat ID.
-          <br />
-          <strong>3.</strong> Paste the Chat ID above and click Save.
+          <strong>2.</strong> Paste the Chat ID above and click Save.
         </span>
       </p>
     </div>
