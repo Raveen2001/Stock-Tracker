@@ -4,7 +4,7 @@ import { ToastContainer } from "react-toastify";
 import "react-toastify/dist/ReactToastify.css";
 import "./App.css";
 import AlertsPanel from "./components/AlertsPanel";
-import PhonePrompt from "./components/PhonePrompt";
+import LoginForm from "./components/LoginForm";
 import StockCard from "./components/StockCard";
 import StockSearch from "./components/StockSearch";
 import TelegramSettings from "./components/TelegramSettings";
@@ -28,8 +28,9 @@ function App() {
     toggleAlert,
     refreshStock,
     profileResolved,
-    needsPhonePrompt,
-    submitProfilePhone,
+    needsLogin,
+    submitLogin,
+    loginError,
     telegramChatId,
     submitTelegramChatId,
   } = useStockTracker();
@@ -38,8 +39,8 @@ function App() {
 
   return (
     <div className="app">
-      {profileResolved && needsPhonePrompt ? (
-        <PhonePrompt onSubmit={submitProfilePhone} />
+      {profileResolved && needsLogin ? (
+        <LoginForm onSubmit={submitLogin} error={loginError} />
       ) : null}
       <header className="app-header">
         <div className="header-content">
@@ -80,7 +81,7 @@ function App() {
                 : "Establishing a live connection to SpacetimeDB."}
             </p>
           </div>
-        ) : needsPhonePrompt ? null : !watchlistReady ? (
+        ) : needsLogin ? null : !watchlistReady ? (
           <div className="home-initial-loading" role="status" aria-live="polite">
             <Loader2 size={40} className="home-initial-loading-icon spinning" aria-hidden />
             <p className="home-initial-loading-title">
@@ -95,15 +96,6 @@ function App() {
         ) : (
           <>
             <StockSearch onAdd={addToWatchlist} watchlist={watchlist} />
-
-            <div className="data-refresh-notice" role="status">
-              <Info size={16} className="data-refresh-notice-icon" aria-hidden />
-              <p>
-                Live prices are fetched from the server about every <strong>5 seconds</strong> while
-                you&apos;re connected. Expand a card and use <strong>refresh</strong> to reload that
-                stock&apos;s intraday chart.
-              </p>
-            </div>
 
             <TelegramSettings
               telegramChatId={telegramChatId}
@@ -165,6 +157,15 @@ function App() {
                 onToggle={toggleAlert}
               />
             )}
+
+            <div className="data-refresh-notice" role="status">
+              <Info size={16} className="data-refresh-notice-icon" aria-hidden />
+              <p>
+                Live prices are fetched from the server about every <strong>5 seconds</strong> while
+                you&apos;re connected. Expand a card and use <strong>refresh</strong> to reload that
+                stock&apos;s intraday chart.
+              </p>
+            </div>
           </>
         )}
       </main>

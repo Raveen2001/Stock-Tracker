@@ -3,10 +3,6 @@ import { ScheduleAt } from "spacetimedb";
 
 // ─── Tables ───────────────────────────────────────────────────────────────────
 
-/**
- * Shared live price data for every symbol currently on any user's watchlist.
- * Keyed by symbol string (e.g. "RELIANCE.NS", "AAPL"). Market-agnostic by design.
- */
 const stockPrice = table(
   { name: "stock_price", public: true },
   {
@@ -25,28 +21,20 @@ const stockPrice = table(
   },
 );
 
-/**
- * Per-user watchlist. Each row is one symbol for one identity.
- */
 const watchlistItem = table(
   { name: "watchlist_item", public: true },
   {
     id: t.u64().primaryKey().autoInc(),
-    owner: t.identity(),
+    accountId: t.u64(),
     symbol: t.string(),
   },
 );
 
-/**
- * Per-user price alerts. The server-side fetch_prices procedure detects
- * threshold crossings and sets active=false + triggeredAt. The client
- * sees the onUpdate event and shows a toast notification.
- */
 const alert = table(
   { name: "alert", public: true },
   {
     id: t.u64().primaryKey().autoInc(),
-    owner: t.identity(),
+    accountId: t.u64(),
     symbol: t.string(),
     targetPrice: t.f64(),
     alertType: t.string(),
@@ -56,10 +44,6 @@ const alert = table(
   },
 );
 
-/**
- * Internal schedule table. One row inserted by init() triggers fetch_prices
- * every 5 seconds.
- */
 const priceFetchSchedule = table(
   { name: "price_fetch_schedule", scheduled: (): any => fetchPrices },
   {
@@ -69,24 +53,32 @@ const priceFetchSchedule = table(
 );
 
 /**
- * One row per SpacetimeDB identity. Phone is private (not client-subscribable).
- * Used for cross-device watchlist recovery when the user re-enters the same number.
+ * User account keyed by auto-incrementing ID. Phone is unique across accounts.
+ * Private so clients cannot subscribe to it.
  */
-const userProfile = table(
-  { name: "user_profile", public: false },
+const account = table(
+  { name: "account", public: false },
   {
-    identity: t.identity().primaryKey(),
+    id: t.u64().primaryKey().autoInc(),
     phone: t.string(),
+    password: t.string(),
     telegramChatId: t.string().optional(),
     registeredAt: t.timestamp(),
   },
 );
 
 /**
- * Singleton config row for the Telegram bot token.
- * Private so it's never exposed to clients. Set via the setBotToken reducer
- * after publishing (e.g. `spacetime call stock-tracker set_bot_token '{"key":"telegram","value":"BOT_TOKEN"}'`).
+ * Links a SpacetimeDB identity (one per device) to an account.
+ * Multiple identities can point to the same accountId (multi-device).
  */
+const identityLink = table(
+  { name: "identity_link", public: false },
+  {
+    identity: t.identity().primaryKey(),
+    accountId: t.u64(),
+  },
+);
+
 const botConfig = table(
   { name: "bot_config", public: false },
   {
@@ -100,18 +92,29 @@ const spacetimedb = schema({
   watchlistItem,
   alert,
   priceFetchSchedule,
-  userProfile,
+  account,
+  identityLink,
   botConfig,
 });
 export default spacetimedb;
 
+// ─── Helpers ──────────────────────────────────────────────────────────────────
+
+type ReducerContext = Parameters<Parameters<typeof spacetimedb.reducer>[1]>[0];
+
+function getAccountId(ctx: ReducerContext): bigint {
+  const link = ctx.db.identityLink.identity.find(ctx.sender);
+  if (!link) throw new SenderError("Not logged in");
+  return link.accountId;
+}
+
+function normalizePhone(raw: string): string {
+  return raw.replace(/\D/g, "");
+}
+
 // ─── Lifecycle ────────────────────────────────────────────────────────────────
 
-/**
- * Called once when the module is first published. Seeds the price fetch schedule.
- */
 export const init = spacetimedb.init((ctx) => {
-  // Insert a single schedule row that repeats every 5 seconds (5,000,000 microseconds)
   ctx.db.priceFetchSchedule.insert({
     scheduledId: 0n,
     scheduledAt: ScheduleAt.interval(5_000_000n),
@@ -121,46 +124,135 @@ export const init = spacetimedb.init((ctx) => {
   );
 });
 
+// ─── Auth Reducers ────────────────────────────────────────────────────────────
+
+export const register = spacetimedb.reducer(
+  { phone: t.string(), password: t.string() },
+  (ctx, { phone, password }) => {
+    const phoneNorm = normalizePhone(phone);
+    if (!phoneNorm) throw new SenderError("Phone must not be empty");
+    if (phoneNorm.length < 10 || phoneNorm.length > 15) {
+      throw new SenderError("Phone must be 10–15 digits");
+    }
+    if (!password || password.length < 4) {
+      throw new SenderError("Password must be at least 4 characters");
+    }
+
+    // Check if phone is already taken
+    for (const a of ctx.db.account.iter()) {
+      if (a.phone === phoneNorm) {
+        throw new SenderError("Phone number already registered. Please login.");
+      }
+    }
+
+    // Check if this identity is already linked
+    const existingLink = ctx.db.identityLink.identity.find(ctx.sender);
+    if (existingLink) {
+      throw new SenderError("This device is already logged in");
+    }
+
+    const acct = ctx.db.account.insert({
+      id: 0n,
+      phone: phoneNorm,
+      password,
+      telegramChatId: undefined,
+      registeredAt: ctx.timestamp,
+    });
+
+    ctx.db.identityLink.insert({
+      identity: ctx.sender,
+      accountId: acct.id,
+    });
+
+    console.info(
+      `Account registered: phone ${phoneNorm} -> account ${acct.id} (identity ${ctx.sender.toHexString().substring(0, 8)})`,
+    );
+  },
+);
+
+export const login = spacetimedb.reducer(
+  { phone: t.string(), password: t.string() },
+  (ctx, { phone, password }) => {
+    const phoneNorm = normalizePhone(phone);
+    if (!phoneNorm) throw new SenderError("Phone must not be empty");
+
+    let acct: ReturnType<typeof ctx.db.account.id.find> | null = null;
+    for (const a of ctx.db.account.iter()) {
+      if (a.phone === phoneNorm) {
+        acct = a;
+        break;
+      }
+    }
+
+    if (!acct) {
+      throw new SenderError("Account not found. Please register first.");
+    }
+
+    if (acct.password !== password) {
+      throw new SenderError("Incorrect password");
+    }
+
+    // Link this identity to the account (or update if already linked elsewhere)
+    const existingLink = ctx.db.identityLink.identity.find(ctx.sender);
+    if (existingLink) {
+      if (existingLink.accountId === acct.id) {
+        return; // already logged in to this account
+      }
+      ctx.db.identityLink.identity.update({
+        identity: ctx.sender,
+        accountId: acct.id,
+      });
+    } else {
+      ctx.db.identityLink.insert({
+        identity: ctx.sender,
+        accountId: acct.id,
+      });
+    }
+
+    console.info(
+      `Login: phone ${phoneNorm} -> account ${acct.id} (identity ${ctx.sender.toHexString().substring(0, 8)})`,
+    );
+  },
+);
+
 // ─── Watchlist Reducers ───────────────────────────────────────────────────────
 
 export const addToWatchlist = spacetimedb.reducer(
   { symbol: t.string() },
   (ctx, { symbol }) => {
+    const aid = getAccountId(ctx);
     const sym = symbol.trim().toUpperCase();
     if (!sym) throw new SenderError("Symbol must not be empty");
 
-    // Dedup: check if this owner already has this symbol
     for (const item of ctx.db.watchlistItem.iter()) {
-      if (item.owner.isEqual(ctx.sender) && item.symbol === sym) {
-        return; // already exists, silently succeed
+      if (item.accountId === aid && item.symbol === sym) {
+        return;
       }
     }
 
-    ctx.db.watchlistItem.insert({ id: 0n, owner: ctx.sender, symbol: sym });
-    console.info(`${ctx.sender.toHexString().substring(0, 8)} added ${sym}`);
+    ctx.db.watchlistItem.insert({ id: 0n, accountId: aid, symbol: sym });
+    console.info(`Account ${aid} added ${sym}`);
   },
 );
 
 export const removeFromWatchlist = spacetimedb.reducer(
   { symbol: t.string() },
   (ctx, { symbol }) => {
+    const aid = getAccountId(ctx);
     const sym = symbol.trim().toUpperCase();
 
-    // Remove watchlist entry
     for (const item of ctx.db.watchlistItem.iter()) {
-      if (item.owner.isEqual(ctx.sender) && item.symbol === sym) {
+      if (item.accountId === aid && item.symbol === sym) {
         ctx.db.watchlistItem.id.delete(item.id);
       }
     }
 
-    // Remove associated alerts for this owner + symbol
     for (const a of ctx.db.alert.iter()) {
-      if (a.owner.isEqual(ctx.sender) && a.symbol === sym) {
+      if (a.accountId === aid && a.symbol === sym) {
         ctx.db.alert.id.delete(a.id);
       }
     }
 
-    // If no other user watches this symbol, remove the price row to keep the table clean
     let othersWatch = false;
     for (const item of ctx.db.watchlistItem.iter()) {
       if (item.symbol === sym) {
@@ -180,6 +272,7 @@ export const removeFromWatchlist = spacetimedb.reducer(
 export const addAlert = spacetimedb.reducer(
   { symbol: t.string(), targetPrice: t.f64(), alertType: t.string() },
   (ctx, { symbol, targetPrice, alertType }) => {
+    const aid = getAccountId(ctx);
     const sym = symbol.trim().toUpperCase();
     if (!sym) throw new SenderError("Symbol must not be empty");
     if (targetPrice <= 0)
@@ -190,7 +283,7 @@ export const addAlert = spacetimedb.reducer(
 
     ctx.db.alert.insert({
       id: 0n,
-      owner: ctx.sender,
+      accountId: aid,
       symbol: sym,
       targetPrice,
       alertType,
@@ -204,9 +297,10 @@ export const addAlert = spacetimedb.reducer(
 export const removeAlert = spacetimedb.reducer(
   { alertId: t.u64() },
   (ctx, { alertId }) => {
+    const aid = getAccountId(ctx);
     const a = ctx.db.alert.id.find(alertId);
     if (!a) return;
-    if (!a.owner.isEqual(ctx.sender)) throw new SenderError("Not your alert");
+    if (a.accountId !== aid) throw new SenderError("Not your alert");
     ctx.db.alert.id.delete(alertId);
   },
 );
@@ -214,9 +308,10 @@ export const removeAlert = spacetimedb.reducer(
 export const toggleAlert = spacetimedb.reducer(
   { alertId: t.u64() },
   (ctx, { alertId }) => {
+    const aid = getAccountId(ctx);
     const a = ctx.db.alert.id.find(alertId);
     if (!a) throw new SenderError("Alert not found");
-    if (!a.owner.isEqual(ctx.sender)) throw new SenderError("Not your alert");
+    if (a.accountId !== aid) throw new SenderError("Not your alert");
     ctx.db.alert.id.update({
       ...a,
       active: !a.active,
@@ -225,98 +320,34 @@ export const toggleAlert = spacetimedb.reducer(
   },
 );
 
-// ─── User profile (phone) + cross-device merge ────────────────────────────────
+// ─── Profile Procedures ──────────────────────────────────────────────────────
 
-/** Digits only, 10–15 length (E.164-style without +). */
-function normalizePhone(raw: string): string {
-  return raw.replace(/\D/g, "");
-}
-
-/**
- * Saves phone for the caller. If another identity already used this number,
- * watchlist rows and alerts are merged onto the caller and the old profile row is removed.
- */
-export const registerPhone = spacetimedb.reducer(
-  { phone: t.string() },
-  (ctx, { phone }) => {
-    const phoneNorm = normalizePhone(phone);
-    if (!phoneNorm) throw new SenderError("Phone must not be empty");
-    if (phoneNorm.length < 10 || phoneNorm.length > 15) {
-      throw new SenderError("Phone must be 10–15 digits");
-    }
-
-    const mine = ctx.db.userProfile.identity.find(ctx.sender);
-    if (mine && mine.phone === phoneNorm) {
-      return;
-    }
-
-    let otherIdentity: typeof ctx.sender | null = null;
-    for (const p of ctx.db.userProfile.iter()) {
-      if (p.phone === phoneNorm && !p.identity.isEqual(ctx.sender)) {
-        otherIdentity = p.identity;
-        break;
-      }
-    }
-
-    if (otherIdentity) {
-      const watchlistIdsToRemove: bigint[] = [];
-      const symbolsToAdd: string[] = [];
-
-      for (const item of ctx.db.watchlistItem.iter()) {
-        if (!item.owner.isEqual(otherIdentity)) continue;
-        watchlistIdsToRemove.push(item.id);
-        let senderHas = false;
-        for (const i2 of ctx.db.watchlistItem.iter()) {
-          if (i2.owner.isEqual(ctx.sender) && i2.symbol === item.symbol) {
-            senderHas = true;
-            break;
-          }
-        }
-        if (!senderHas) symbolsToAdd.push(item.symbol);
-      }
-
-      for (const id of watchlistIdsToRemove) {
-        ctx.db.watchlistItem.id.delete(id);
-      }
-      for (const sym of symbolsToAdd) {
-        ctx.db.watchlistItem.insert({ id: 0n, owner: ctx.sender, symbol: sym });
-      }
-
-      for (const a of ctx.db.alert.iter()) {
-        if (a.owner.isEqual(otherIdentity)) {
-          ctx.db.alert.id.update({ ...a, owner: ctx.sender });
-        }
-      }
-
-      ctx.db.userProfile.identity.delete(otherIdentity);
-    }
-
-    const now = ctx.timestamp;
-    if (mine) {
-      ctx.db.userProfile.identity.update({
-        ...mine,
-        phone: phoneNorm,
-      });
-    } else {
-      ctx.db.userProfile.insert({
-        identity: ctx.sender,
-        phone: phoneNorm,
-        telegramChatId: undefined,
-        registeredAt: now,
-      });
-    }
-  },
-);
-
-/**
- * Returns the registered phone for the calling identity, or empty string if none.
- * (Private `user_profile` is not subscribable from clients.)
- */
 export const getMyPhone = spacetimedb.procedure(t.string(), (ctx, _args) =>
   ctx.withTx((tx) => {
-    const row = tx.db.userProfile.identity.find(ctx.sender);
-    return row?.phone ?? "";
+    const link = tx.db.identityLink.identity.find(ctx.sender);
+    if (!link) return "";
+    const acct = tx.db.account.id.find(link.accountId);
+    return acct?.phone ?? "";
   }),
+);
+
+export const getMyAccountId = spacetimedb.procedure(t.string(), (ctx, _args) =>
+  ctx.withTx((tx) => {
+    const link = tx.db.identityLink.identity.find(ctx.sender);
+    if (!link) return "";
+    return link.accountId.toString();
+  }),
+);
+
+export const getMyTelegramChatId = spacetimedb.procedure(
+  t.string(),
+  (ctx, _args) =>
+    ctx.withTx((tx) => {
+      const link = tx.db.identityLink.identity.find(ctx.sender);
+      if (!link) return "";
+      const acct = tx.db.account.id.find(link.accountId);
+      return acct?.telegramChatId ?? "";
+    }),
 );
 
 // ─── Telegram Chat ID ────────────────────────────────────────────────────────
@@ -327,39 +358,20 @@ export const setTelegramChatId = spacetimedb.reducer(
     const trimmed = chatId.trim();
     if (!trimmed) throw new SenderError("Chat ID must not be empty");
 
-    const mine = ctx.db.userProfile.identity.find(ctx.sender);
-    if (!mine) {
-      throw new SenderError(
-        "Register your phone number first before setting a Telegram chat ID",
-      );
-    }
+    const aid = getAccountId(ctx);
+    const acct = ctx.db.account.id.find(aid);
+    if (!acct) throw new SenderError("Account not found");
 
-    ctx.db.userProfile.identity.update({
-      ...mine,
+    ctx.db.account.id.update({
+      ...acct,
       telegramChatId: trimmed,
     });
-    console.info(
-      `${ctx.sender.toHexString().substring(0, 8)} set Telegram chat ID`,
-    );
+    console.info(`Account ${aid} set Telegram chat ID`);
   },
-);
-
-export const getMyTelegramChatId = spacetimedb.procedure(
-  t.string(),
-  (ctx, _args) =>
-    ctx.withTx((tx) => {
-      const row = tx.db.userProfile.identity.find(ctx.sender);
-      return row?.telegramChatId ?? "";
-    }),
 );
 
 // ─── Bot Config ──────────────────────────────────────────────────────────────
 
-/**
- * Store a config value (e.g. Telegram bot token) in the private bot_config table.
- * Call once after publishing:
- *   spacetime call stock-tracker set_bot_config '{"key":"telegram_bot_token","value":"YOUR_TOKEN"}'
- */
 export const setBotConfig = spacetimedb.reducer(
   { key: t.string(), value: t.string() },
   (ctx, { key, value }) => {
@@ -375,7 +387,9 @@ export const setBotConfig = spacetimedb.reducer(
     } else {
       ctx.db.botConfig.insert({ key: trimmedKey, value: trimmedValue });
     }
-    console.info(`Bot config "${trimmedKey}" updated by ${ctx.sender.toHexString().substring(0, 8)}`);
+    console.info(
+      `Bot config "${trimmedKey}" updated by ${ctx.sender.toHexString().substring(0, 8)}`,
+    );
   },
 );
 
@@ -387,22 +401,15 @@ const YAHOO_HEADERS = {
   Accept: "application/json",
 };
 
-/**
- * Runs every 5 seconds (triggered by priceFetchSchedule).
- * Fetches current prices from Yahoo Finance for all watched symbols,
- * upserts stock_price rows, and checks active alerts.
- */
 export const fetchPrices = spacetimedb.procedure(
   { arg: priceFetchSchedule.rowType },
   t.unit(),
   (ctx, _arg) => {
-    // 1. Collect unique symbols from watchlist
     const symbols = new Set<string>();
     ctx.withTx((tx) => {
       for (const item of tx.db.watchlistItem.iter()) {
         symbols.add(item.symbol);
       }
-      // Also include symbols from active alerts in case they're not on watchlist
       for (const a of tx.db.alert.iter()) {
         if (a.active) symbols.add(a.symbol);
       }
@@ -410,7 +417,6 @@ export const fetchPrices = spacetimedb.procedure(
 
     if (symbols.size === 0) return {};
 
-    // 2. HTTP phase: fetch each symbol sequentially (no transaction open)
     const results: Array<{
       symbol: string;
       name: string;
@@ -466,10 +472,8 @@ export const fetchPrices = spacetimedb.procedure(
 
     if (results.length === 0) return {};
 
-    // 3. Write phase: upsert prices and trigger alerts in a single transaction.
-    //    Collect triggered alerts so we can send Telegram messages outside the tx.
     const triggeredAlerts: Array<{
-      ownerHex: string;
+      accountId: bigint;
       symbol: string;
       alertType: string;
       targetPrice: number;
@@ -502,16 +506,16 @@ export const fetchPrices = spacetimedb.procedure(
               `Alert triggered: ${r.symbol} ${a.alertType} ${a.targetPrice} (current: ${r.price})`,
             );
 
-            const profile = tx.db.userProfile.identity.find(a.owner);
-            if (profile?.telegramChatId) {
+            const acct = tx.db.account.id.find(a.accountId);
+            if (acct?.telegramChatId) {
               triggeredAlerts.push({
-                ownerHex: a.owner.toHexString().substring(0, 8),
+                accountId: a.accountId,
                 symbol: r.symbol,
                 alertType: a.alertType,
                 targetPrice: a.targetPrice,
                 currentPrice: r.price,
                 currency: r.currency,
-                chatId: profile.telegramChatId,
+                chatId: acct.telegramChatId,
               });
             }
           }
@@ -519,22 +523,22 @@ export const fetchPrices = spacetimedb.procedure(
       }
     });
 
-    // 4. Read Telegram config from bot_config table
     let botToken: string | undefined;
     let watchlistUpdatesEnabled = false;
     ctx.withTx((tx) => {
       botToken = tx.db.botConfig.key.find("telegram_bot_token")?.value;
       watchlistUpdatesEnabled =
-        tx.db.botConfig.key.find("telegram_watchlist_updates")?.value === "true";
+        tx.db.botConfig.key.find("telegram_watchlist_updates")?.value ===
+        "true";
     });
 
     if (!botToken) return {};
 
-    // 5. Send Telegram notifications for triggered alerts
     for (const ta of triggeredAlerts) {
       try {
         const dot = ta.alertType === "above" ? "🟢" : "🔴";
-        const direction = ta.alertType === "above" ? "rose above" : "dropped below";
+        const direction =
+          ta.alertType === "above" ? "rose above" : "dropped below";
         const shortSym = ta.symbol.replace(".NS", "").replace(".BO", "");
 
         const text =
@@ -559,39 +563,38 @@ export const fetchPrices = spacetimedb.procedure(
 
         if (res.status !== 200) {
           console.warn(
-            `Telegram send failed for ${ta.ownerHex}: HTTP ${res.status}`,
+            `Telegram send failed for account ${ta.accountId}: HTTP ${res.status}`,
           );
         }
       } catch (e) {
-        console.error(`Telegram send error for ${ta.ownerHex}:`, e);
+        console.error(`Telegram send error for account ${ta.accountId}:`, e);
       }
     }
 
-    // 6. Send watchlist price summary (controlled by telegram_watchlist_updates flag)
     if (watchlistUpdatesEnabled) {
-      const userWatchlists = new Map<
-        string,
+      const accountWatchlists = new Map<
+        bigint,
         { chatId: string; symbols: string[] }
       >();
       ctx.withTx((tx) => {
-        for (const profile of tx.db.userProfile.iter()) {
-          if (!profile.telegramChatId) continue;
+        for (const acct of tx.db.account.iter()) {
+          if (!acct.telegramChatId) continue;
           const syms: string[] = [];
           for (const item of tx.db.watchlistItem.iter()) {
-            if (item.owner.isEqual(profile.identity)) {
+            if (item.accountId === acct.id) {
               syms.push(item.symbol);
             }
           }
           if (syms.length > 0) {
-            userWatchlists.set(profile.telegramChatId, {
-              chatId: profile.telegramChatId,
+            accountWatchlists.set(acct.id, {
+              chatId: acct.telegramChatId,
               symbols: syms,
             });
           }
         }
       });
 
-      for (const [, user] of userWatchlists) {
+      for (const [, user] of accountWatchlists) {
         const lines = user.symbols.map((sym) => {
           const r = results.find((res) => res.symbol === sym);
           const shortSym = sym.replace(".NS", "").replace(".BO", "");
@@ -601,8 +604,7 @@ export const fetchPrices = spacetimedb.procedure(
           return `${dot} <b>${shortSym}</b>  <code>${r.currency} ${r.price.toFixed(2)}</code>  ${sign}${r.changePercent.toFixed(2)}%`;
         });
 
-        const text =
-          `📊 <b>Watchlist</b>\n\n` + lines.join("\n");
+        const text = `📊 <b>Watchlist</b>\n\n` + lines.join("\n");
 
         try {
           ctx.http.fetch(
@@ -629,10 +631,6 @@ export const fetchPrices = spacetimedb.procedure(
 
 // ─── On-Demand Procedure: fetch_chart ────────────────────────────────────────
 
-/**
- * Called by the client to get intraday chart data for a symbol.
- * Returns parsed quote + price history. Not stored in any table.
- */
 export const fetchChart = spacetimedb.procedure(
   { symbol: t.string(), interval: t.string(), range: t.string() },
   t.string(),
@@ -653,7 +651,6 @@ export const fetchChart = spacetimedb.procedure(
     const quotes = result.indicators?.quote?.[0] ?? {};
     const timestamps: number[] = result.timestamp ?? [];
 
-    /** Meta often omits regularMarketOpen; session open = first bar's open (same as Yahoo's first `open[]`). */
     const openSeries = quotes.open as number[] | undefined;
     const sessionOpenFromBars =
       Array.isArray(openSeries) && openSeries.length > 0
@@ -663,7 +660,8 @@ export const fetchChart = spacetimedb.procedure(
         : undefined;
 
     const currentPrice: number = meta.regularMarketPrice;
-    const previousClose: number = meta.chartPreviousClose ?? meta.previousClose;
+    const previousClose: number =
+      meta.chartPreviousClose ?? meta.previousClose;
     const change = currentPrice - previousClose;
     const changePercent =
       previousClose > 0 ? (change / previousClose) * 100 : 0;
@@ -678,9 +676,10 @@ export const fetchChart = spacetimedb.procedure(
           minute: "2-digit",
           hour12: true,
         }),
-        price: (quotes.close?.[i] ?? quotes.open?.[i] ?? null) as number | null,
+        price: (quotes.close?.[i] ?? quotes.open?.[i] ?? null) as
+          | number
+          | null,
         timestamp: ts,
-        /** Per-minute open; first bar matches session open (used by client if quote.open is missing). */
         barOpen: openSeries?.[i] ?? null,
       }))
       .filter((p: { price: number | null }) => p.price != null);

@@ -7,14 +7,20 @@ import posthog from '../posthog';
 export function useStockTracker() {
   const { identity, isActive, getConnection } = useSpacetimeDB();
 
+  // ─── Account state ──────────────────────────────────────────────────────────
+
+  const [profilePhone, setProfilePhone] = useState(null);
+  const [profileChecked, setProfileChecked] = useState(false);
+  const [accountId, setAccountId] = useState(null);
+  const [loginError, setLoginError] = useState(null);
+
   // ─── Server-synced state via SpacetimeDB subscriptions ───────────────────────
 
   const [watchlistItems, watchlistReady] = useTable(
-    identity ? tables.watchlistItem.where(r => r.owner.eq(identity)) : tables.watchlistItem,
+    accountId ? tables.watchlistItem.where(r => r.accountId.eq(BigInt(accountId))) : tables.watchlistItem,
     {
       onInsert: item => {
-        // When a new watchlist item appears, fetch its chart data
-        if (identity && item.owner.toHexString() === identity.toHexString()) {
+        if (accountId && item.accountId.toString() === accountId) {
           fetchChartForSymbol(item.symbol);
         }
       },
@@ -26,10 +32,9 @@ export function useStockTracker() {
   const triggeredAlertsRef = useRef(new Set());
 
   const [alerts, alertsReady] = useTable(
-    identity ? tables.alert.where(r => r.owner.eq(identity)) : tables.alert,
+    accountId ? tables.alert.where(r => r.accountId.eq(BigInt(accountId))) : tables.alert,
     {
       onUpdate: (_oldAlert, newAlert) => {
-        // Server triggered the alert (active flipped to false)
         if (!newAlert.active && newAlert.triggeredAt && !triggeredAlertsRef.current.has(String(newAlert.id))) {
           triggeredAlertsRef.current.add(String(newAlert.id));
 
@@ -65,12 +70,10 @@ export function useStockTracker() {
   // ─── Local client-side state (chart data + loading) ──────────────────────────
 
   const [chartData, setChartData] = useState({});
-  /** Extra quote fields from fetchChart (open, 52w) — not stored on stock_price rows. */
   const [chartQuoteBySymbol, setChartQuoteBySymbol] = useState({});
   const [loading, setLoading] = useState({});
   const [errors, setErrors] = useState({});
 
-  // Keep a ref to stockPrices so the alert onUpdate callback can read current prices
   const stockPricesRef = useRef({});
   useEffect(() => {
     const map = {};
@@ -87,22 +90,19 @@ export function useStockTracker() {
   const addAlertReducer = useReducer(reducers.addAlert);
   const removeAlertReducer = useReducer(reducers.removeAlert);
   const toggleAlertReducer = useReducer(reducers.toggleAlert);
-  const registerPhoneReducer = useReducer(reducers.registerPhone);
+  const registerReducer = useReducer(reducers.register);
+  const loginReducer = useReducer(reducers.login);
   const setTelegramChatIdReducer = useReducer(reducers.setTelegramChatId);
 
-  // ─── Phone profile (private user_profile on server) ───────────────────────────
-
-  const [profilePhone, setProfilePhone] = useState(null);
-  const [profileChecked, setProfileChecked] = useState(false);
+  // ─── Profile check on connection ────────────────────────────────────────────
 
   useEffect(() => {
     if (!isActive || !identity) {
       setProfilePhone(null);
       setProfileChecked(false);
+      setAccountId(null);
       return;
     }
-
-    const cacheKey = `st_profile_phone_${identity.toHexString()}`;
 
     let cancelled = false;
     (async () => {
@@ -112,71 +112,95 @@ export function useStockTracker() {
           if (!cancelled) setProfilePhone('');
           return;
         }
-        const phone = await conn.procedures.getMyPhone({});
+        const [phone, acctId] = await Promise.all([
+          conn.procedures.getMyPhone({}),
+          conn.procedures.getMyAccountId({}),
+        ]);
         if (cancelled) return;
-        if (phone) {
-          sessionStorage.setItem(cacheKey, phone);
+        if (phone && acctId) {
           setProfilePhone(phone);
+          setAccountId(acctId);
         } else {
-          sessionStorage.removeItem(cacheKey);
-          sessionStorage.removeItem(`st_telegram_chat_id_${identity.toHexString()}`);
           setProfilePhone('');
+          setAccountId(null);
         }
       } catch (e) {
-        console.error('getMyPhone failed:', e);
-        if (!cancelled) setProfilePhone('');
+        console.error('Profile check failed:', e);
+        if (!cancelled) {
+          setProfilePhone('');
+          setAccountId(null);
+        }
       } finally {
         if (!cancelled) setProfileChecked(true);
       }
     })();
 
-    return () => {
-      cancelled = true;
-    };
+    return () => { cancelled = true; };
   }, [isActive, identity, getConnection]);
 
-  const submitProfilePhone = useCallback(
-    (phoneRaw) => {
-      const trimmed = phoneRaw.trim();
-      if (!trimmed) {
-        toast.error('Please enter a phone number');
-        return;
-      }
-      const digits = trimmed.replace(/\D/g, '');
+  // ─── Login / Register ────────────────────────────────────────────────────────
+
+  const submitLogin = useCallback(
+    async (phone, password, isRegister) => {
+      const digits = phone.replace(/\D/g, '');
       if (digits.length < 10 || digits.length > 15) {
-        toast.error('Enter a valid phone number (10–15 digits)');
+        setLoginError('Enter a valid phone number (10–15 digits)');
         return;
       }
+      if (!password || password.length < 4) {
+        setLoginError('Password must be at least 4 characters');
+        return;
+      }
+
+      setLoginError(null);
+
       try {
-        registerPhoneReducer({ phone: trimmed });
-        if (identity) {
-          sessionStorage.setItem(`st_profile_phone_${identity.toHexString()}`, digits);
+        if (isRegister) {
+          registerReducer({ phone, password });
+        } else {
+          loginReducer({ phone, password });
         }
-        setProfilePhone(digits);
-        posthog.capture({
-          distinctId: identity?.toHexString() ?? 'anonymous',
-          event: 'profile phone registered',
-          properties: { phone_length: digits.length },
-        });
+
+        // Wait a moment for the reducer to process, then check profile
+        await new Promise(r => setTimeout(r, 1000));
+
+        const conn = getConnection();
+        if (conn) {
+          const [ph, acctId] = await Promise.all([
+            conn.procedures.getMyPhone({}),
+            conn.procedures.getMyAccountId({}),
+          ]);
+          if (ph && acctId) {
+            setProfilePhone(ph);
+            setAccountId(acctId);
+            posthog.capture({
+              distinctId: identity?.toHexString() ?? 'anonymous',
+              event: isRegister ? 'account registered' : 'account login',
+              properties: { phone_length: digits.length },
+            });
+          } else {
+            setLoginError(isRegister
+              ? 'Registration failed. Phone may already be in use.'
+              : 'Login failed. Check your credentials.');
+          }
+        }
       } catch (e) {
         console.error(e);
-        toast.error(e?.message || 'Could not save phone number');
+        setLoginError(e?.message || 'Authentication failed');
       }
     },
-    [registerPhoneReducer, identity],
+    [registerReducer, loginReducer, getConnection, identity],
   );
 
-  // ─── Telegram Chat ID (private user_profile on server) ─────────────────────────
+  // ─── Telegram Chat ID ───────────────────────────────────────────────────────
 
   const [telegramChatId, setTelegramChatId] = useState(null);
 
   useEffect(() => {
-    if (!isActive || !identity) {
+    if (!isActive || !identity || !accountId) {
       setTelegramChatId(null);
       return;
     }
-
-    const cacheKey = `st_telegram_chat_id_${identity.toHexString()}`;
 
     let cancelled = false;
     (async () => {
@@ -185,23 +209,15 @@ export function useStockTracker() {
         if (!conn) return;
         const chatId = await conn.procedures.getMyTelegramChatId({});
         if (cancelled) return;
-        if (chatId) {
-          sessionStorage.setItem(cacheKey, chatId);
-          setTelegramChatId(chatId);
-        } else {
-          sessionStorage.removeItem(cacheKey);
-          setTelegramChatId('');
-        }
+        setTelegramChatId(chatId || '');
       } catch (e) {
         console.error('getMyTelegramChatId failed:', e);
         if (!cancelled) setTelegramChatId('');
       }
     })();
 
-    return () => {
-      cancelled = true;
-    };
-  }, [isActive, identity, getConnection]);
+    return () => { cancelled = true; };
+  }, [isActive, identity, accountId, getConnection]);
 
   const submitTelegramChatId = useCallback(
     (chatId) => {
@@ -212,9 +228,6 @@ export function useStockTracker() {
       }
       try {
         setTelegramChatIdReducer({ chatId: trimmed });
-        if (identity) {
-          sessionStorage.setItem(`st_telegram_chat_id_${identity.toHexString()}`, trimmed);
-        }
         setTelegramChatId(trimmed);
         toast.success('Telegram Chat ID saved');
         posthog.capture({
@@ -274,7 +287,6 @@ export function useStockTracker() {
     }
   }, [getConnection, identity]);
 
-  // Fetch chart data for all watchlist items on initial connection
   const hasFetchedInitial = useRef(false);
   useEffect(() => {
     if (!isActive || !watchlistReady || hasFetchedInitial.current) return;
@@ -284,9 +296,8 @@ export function useStockTracker() {
     }
   }, [isActive, watchlistReady, watchlistItems, fetchChartForSymbol]);
 
-  // ─── Public API (same shape as before so components don't change) ─────────────
+  // ─── Public API ─────────────────────────────────────────────────────────────
 
-  // watchlist: string[] of symbols
   const watchlist = watchlistItems.map(item => item.symbol);
 
   const finiteOrUndef = (v) => {
@@ -295,7 +306,6 @@ export function useStockTracker() {
     return Number.isFinite(n) ? n : undefined;
   };
 
-  // stockData: { [symbol]: quote object } — SpacetimeDB rows merged with fetchChart quote extras
   const stockData = {};
   for (const sp of stockPrices) {
     const q = chartQuoteBySymbol[sp.symbol];
@@ -314,14 +324,12 @@ export function useStockTracker() {
       dayLow: sp.dayLow,
       volume: sp.volume,
       lastUpdated: sp.lastUpdated?.toDate?.()?.toLocaleTimeString('en-IN') ?? '',
-      // quote.open is often absent from chart meta; first intraday bar's barOpen is session open
       open: openFromQuote ?? openFromFirstBar,
       fiftyTwoWeekHigh: q?.fiftyTwoWeekHigh,
       fiftyTwoWeekLow: q?.fiftyTwoWeekLow,
     };
   }
 
-  // alerts: shaped to match the existing AlertsPanel / AlertForm expectations
   const alertsList = alerts.map(a => ({
     id: String(a.id),
     symbol: a.symbol,
@@ -334,7 +342,6 @@ export function useStockTracker() {
 
   const addToWatchlist = useCallback((symbol) => {
     addToWatchlistReducer({ symbol });
-    // Optimistically fetch chart data immediately
     fetchChartForSymbol(symbol.trim().toUpperCase());
     posthog.capture({
       distinctId: identity?.toHexString() ?? 'anonymous',
@@ -416,9 +423,10 @@ export function useStockTracker() {
     toggleAlert,
     refreshStock,
     profileResolved: profileChecked,
-    needsPhonePrompt: profileChecked && profilePhone === '',
+    needsLogin: profileChecked && profilePhone === '',
     profilePhone: profilePhone && profilePhone.length > 0 ? profilePhone : null,
-    submitProfilePhone,
+    submitLogin,
+    loginError,
     telegramChatId: telegramChatId || null,
     submitTelegramChatId,
   };

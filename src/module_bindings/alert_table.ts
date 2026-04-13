@@ -12,7 +12,7 @@ import {
 
 export default __t.row({
   id: __t.u64().primaryKey(),
-  owner: __t.identity(),
+  accountId: __t.u64().name("account_id"),
   symbol: __t.string(),
   targetPrice: __t.f64().name("target_price"),
   alertType: __t.string().name("alert_type"),

@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import React, { useEffect, useState } from "react";
 import { Loader2, MessageCircle, Check, ExternalLink } from "lucide-react";
 
 export default function TelegramSettings({
@@ -6,10 +6,16 @@ export default function TelegramSettings({
   onSave,
 }) {
   const [chatId, setChatId] = useState(telegramChatId ?? "");
+
+  useEffect(() => {
+    if (telegramChatId && !chatId) {
+      setChatId(telegramChatId);
+    }
+  }, [telegramChatId]);
   const [saving, setSaving] = useState(false);
   const [justSaved, setJustSaved] = useState(false);
 
-  const isDirty = chatId.trim() !== (telegramChatId ?? "");
+  const hasValue = chatId.trim().length > 0;
 
   const handleSave = async (e) => {
     e.preventDefault();
@@ -47,7 +53,7 @@ export default function TelegramSettings({
         <button
           type="submit"
           className="telegram-settings-btn"
-          disabled={saving || !isDirty || !chatId.trim()}
+          disabled={saving || !hasValue}
         >
           {saving ? (
             <Loader2 size={16} className="spinning" />

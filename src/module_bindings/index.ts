@@ -36,7 +36,8 @@ import {
 // Import all reducer arg schemas
 import AddAlertReducer from "./add_alert_reducer";
 import AddToWatchlistReducer from "./add_to_watchlist_reducer";
-import RegisterPhoneReducer from "./register_phone_reducer";
+import LoginReducer from "./login_reducer";
+import RegisterReducer from "./register_reducer";
 import RemoveAlertReducer from "./remove_alert_reducer";
 import RemoveFromWatchlistReducer from "./remove_from_watchlist_reducer";
 import SetBotConfigReducer from "./set_bot_config_reducer";
@@ -45,6 +46,7 @@ import ToggleAlertReducer from "./toggle_alert_reducer";
 
 // Import all procedure arg schemas
 import * as FetchChartProcedure from "./fetch_chart_procedure";
+import * as GetMyAccountIdProcedure from "./get_my_account_id_procedure";
 import * as GetMyPhoneProcedure from "./get_my_phone_procedure";
 import * as GetMyTelegramChatIdProcedure from "./get_my_telegram_chat_id_procedure";
 
@@ -96,7 +98,8 @@ const tablesSchema = __schema({
 const reducersSchema = __reducers(
   __reducerSchema("add_alert", AddAlertReducer),
   __reducerSchema("add_to_watchlist", AddToWatchlistReducer),
-  __reducerSchema("register_phone", RegisterPhoneReducer),
+  __reducerSchema("login", LoginReducer),
+  __reducerSchema("register", RegisterReducer),
   __reducerSchema("remove_alert", RemoveAlertReducer),
   __reducerSchema("remove_from_watchlist", RemoveFromWatchlistReducer),
   __reducerSchema("set_bot_config", SetBotConfigReducer),
@@ -107,6 +110,7 @@ const reducersSchema = __reducers(
 /** The schema information for all procedures in this module. This is defined the same way as the procedures would have been defined in the server. */
 const proceduresSchema = __procedures(
   __procedureSchema("fetch_chart", FetchChartProcedure.params, FetchChartProcedure.returnType),
+  __procedureSchema("get_my_account_id", GetMyAccountIdProcedure.params, GetMyAccountIdProcedure.returnType),
   __procedureSchema("get_my_phone", GetMyPhoneProcedure.params, GetMyPhoneProcedure.returnType),
   __procedureSchema("get_my_telegram_chat_id", GetMyTelegramChatIdProcedure.params, GetMyTelegramChatIdProcedure.returnType),
 );

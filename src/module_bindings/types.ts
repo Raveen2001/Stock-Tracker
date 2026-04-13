@@ -10,9 +10,18 @@ import {
   type Infer as __Infer,
 } from "spacetimedb";
 
+export const Account = __t.object("Account", {
+  id: __t.u64(),
+  phone: __t.string(),
+  password: __t.string(),
+  telegramChatId: __t.option(__t.string()),
+  registeredAt: __t.timestamp(),
+});
+export type Account = __Infer<typeof Account>;
+
 export const Alert = __t.object("Alert", {
   id: __t.u64(),
-  owner: __t.identity(),
+  accountId: __t.u64(),
   symbol: __t.string(),
   targetPrice: __t.f64(),
   alertType: __t.string(),
@@ -27,6 +36,12 @@ export const BotConfig = __t.object("BotConfig", {
   value: __t.string(),
 });
 export type BotConfig = __Infer<typeof BotConfig>;
+
+export const IdentityLink = __t.object("IdentityLink", {
+  identity: __t.identity(),
+  accountId: __t.u64(),
+});
+export type IdentityLink = __Infer<typeof IdentityLink>;
 
 export const PriceFetchSchedule = __t.object("PriceFetchSchedule", {
   scheduledId: __t.u64(),
@@ -50,17 +65,9 @@ export const StockPrice = __t.object("StockPrice", {
 });
 export type StockPrice = __Infer<typeof StockPrice>;
 
-export const UserProfile = __t.object("UserProfile", {
-  identity: __t.identity(),
-  phone: __t.string(),
-  telegramChatId: __t.option(__t.string()),
-  registeredAt: __t.timestamp(),
-});
-export type UserProfile = __Infer<typeof UserProfile>;
-
 export const WatchlistItem = __t.object("WatchlistItem", {
   id: __t.u64(),
-  owner: __t.identity(),
+  accountId: __t.u64(),
   symbol: __t.string(),
 });
 export type WatchlistItem = __Infer<typeof WatchlistItem>;

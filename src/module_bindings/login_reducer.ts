@@ -12,4 +12,5 @@ import {
 
 export default {
   phone: __t.string(),
+  password: __t.string(),
 };
