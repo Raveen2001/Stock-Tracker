@@ -42,7 +42,7 @@ export default function PhonePrompt({ onSubmit }) {
             type="tel"
             autoComplete="tel"
             inputMode="tel"
-            placeholder="e.g. 9876543210 or +91 98765 43210"
+            placeholder="e.g. 9876543210"
             className="phone-prompt-input"
             value={phone}
             onChange={(e) => setPhone(e.target.value)}

@@ -534,11 +534,15 @@ export const fetchPrices = spacetimedb.procedure(
     for (const ta of triggeredAlerts) {
       try {
         const dot = ta.alertType === "above" ? "🟢" : "🔴";
+        const direction = ta.alertType === "above" ? "rose above" : "dropped below";
         const shortSym = ta.symbol.replace(".NS", "").replace(".BO", "");
 
         const text =
-          `${dot} <b>${shortSym}</b> hit <code>${ta.currency} ${ta.currentPrice.toLocaleString()}</code>\n` +
-          `Target: <code>${ta.currency} ${ta.targetPrice.toLocaleString()}</code>`;
+          `${dot} <b>Alert Triggered</b>\n` +
+          `━━━━━━━━━━━━━━━━━━━━\n` +
+          `<b>${shortSym}</b> ${direction} your target\n\n` +
+          `🎯  Target      <code>${ta.currency} ${ta.targetPrice.toLocaleString()}</code>\n` +
+          `💰  Current    <code>${ta.currency} ${ta.currentPrice.toLocaleString()}</code>`;
 
         const res = ctx.http.fetch(
           `https://api.telegram.org/bot${botToken}/sendMessage`,

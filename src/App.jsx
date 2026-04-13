@@ -105,6 +105,11 @@ function App() {
               </p>
             </div>
 
+            <TelegramSettings
+              telegramChatId={telegramChatId}
+              onSave={submitTelegramChatId}
+            />
+
             <div className="tabs">
               <button
                 className={`tab ${activeTab === "watchlist" ? "active" : ""}`}
@@ -125,10 +130,6 @@ function App() {
 
             {activeTab === "watchlist" && (
               <div className="watchlist">
-                <TelegramSettings
-                  telegramChatId={telegramChatId}
-                  onSave={submitTelegramChatId}
-                />
                 {watchlist.length === 0 ? (
                   <div className="empty-state">
                     <BarChart3 size={60} strokeWidth={1} />
@@ -162,8 +163,6 @@ function App() {
                 stockData={stockData}
                 onRemove={removeAlert}
                 onToggle={toggleAlert}
-                telegramChatId={telegramChatId}
-                onSaveTelegramChatId={submitTelegramChatId}
               />
             )}
           </>
